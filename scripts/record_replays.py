@@ -17,8 +17,8 @@ SCEN = {
 }
 
 
-def record(name, text, llm=False, remember=False):
-    r = httpx.post(f"{BASE}/api/investigate", json={"input": text, "llm": llm, "remember": remember}, timeout=30).json()
+def record(name, text, llm=False, remember=False, graph="otel"):
+    r = httpx.post(f"{BASE}/api/investigate", json={"input": text, "llm": llm, "remember": remember, "graph": graph}, timeout=30).json()
     rid = r["run_id"]
     events = []
     with httpx.stream("GET", f"{BASE}/api/runs/{rid}/events", timeout=180) as s:
@@ -34,5 +34,9 @@ def record(name, text, llm=False, remember=False):
 if __name__ == "__main__":
     for n, t in SCEN.items():
         record(n, t)
+    for n, g in [("supply-httpie", "sc_httpie"), ("supply-yaml-0", "sc_precommit"), ("supply-yaml-1", "sc_yamlfull")]:
+        record(n, "triage", graph=g)
+    if "--llm" in sys.argv:
+        record("supply-httpie-llm", "triage", llm=True, graph="sc_httpie")
     if "--llm" in sys.argv:
         record("scenario3-llm", "Metrics stopped exporting in production. Here is the trace:\n" + SCEN["scenario3"], llm=True)

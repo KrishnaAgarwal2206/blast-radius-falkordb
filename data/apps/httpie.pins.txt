@@ -9,3 +9,4 @@ requests-toolbelt==0.9.1
 defusedxml==0.7.1
 PySocks==1.7.1
 setuptools==59.6.0
+colorama==0.4.4

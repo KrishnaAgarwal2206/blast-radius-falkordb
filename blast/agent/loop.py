@@ -17,6 +17,10 @@ from . import tools
 
 # $ per million tokens (Haiku 4.5)
 STEP_TITLES = {
+    "sc_findings": "Match advisories to pinned versions, then test reachability from entry points",
+    "sc_plan": "Plan the smallest installable upgrades, checked against graph constraints",
+    "sc_checks": "Run the app's smoke checks on each proposed upgrade (throw-away venv)",
+    "sc_recall": "Recall earlier decisions about the same advisories in other apps",
     "trace_stacktrace": "Parse the stack trace and map each frame to a code node",
     "blast_radius": "Walk reverse dependencies from the failing node (blast radius)",
     "suspect_changes": "Rank recent commits that touched the failing code",
@@ -106,7 +110,7 @@ class Run:
     def supported(self, text, pids, nids=()):
         """Every commit sha / incident id named in the text must appear in the cited paths (or cited nodes)."""
         evidence = " ".join(u for p in pids for u in self.paths[p]["nodes"]) + " " + " ".join(nids)
-        cited = re.findall(r"\b[0-9a-f]{7,40}\b", text) + re.findall(r"\b(?:inc|live)-[0-9a-f]+\b", text)
+        cited = re.findall(r"\b[0-9a-f]{7,40}\b", text) + re.findall(r"\b(?:inc|live)-[0-9a-f]+\b", text) + (re.findall(r"CVE-\d{4}-\d+", text) if nids else [])
         return all(any(x in e for e in evidence.split()) for x in cited)
 
     def finalize(self, answer: dict, emit: bool = True):
@@ -132,7 +136,7 @@ class Run:
         ver = {v["ref"]: v for v in answer.get("verification", []) if isinstance(v, dict) and "ref" in v}
         by = lambda k: [c for c in claims if c["kind"] == k]
         out = dict(summary=answer.get("summary", ""), confidence=answer.get("confidence"),
-                   diagnosis=steps, actions=actions, llm_verification=ver,
+                   diagnosis=steps, actions=actions, llm_verification=ver, extras=answer.get("extras"),
                    impacted=by("impact"), likely_cause=(by("cause") or [None])[0], page=by("page"),
                    similar_incidents=by("similar"), critical=by("critical"), claims=claims,
                    evidence_paths=[self.paths[p] for p in dict.fromkeys(p for c in claims + actions for p in c["path_ids"])],
@@ -158,6 +162,16 @@ def _summary(name, res):
         return ", ".join(p["name"] for p in d.get("page", [])) or "nobody found"
     if name == "recall_incidents":
         return f"{len(d.get('similar', []))} similar past incidents"
+    if name == "sc_findings":
+        c = d.get("counts", {})
+        return f"{d.get('total')} advisories: {c.get('reachable')} reachable, {c.get('no_path_found')} no path found, {c.get('unknown')} unknown"
+    if name == "sc_plan":
+        return "; ".join(f"{x['package']} {x['from_version']} -> {x.get('to_version') or 'BLOCKED'}" for x in d.get("candidates", [])) or "no reachable findings to fix"
+    if name == "sc_checks":
+        ck = d.get("checks", {})
+        return "; ".join(f"{k}: {'PASS' if v.get('checks') and all(c['ok'] for c in v['checks']) else 'FAIL' if v.get('checks') else 'not installable'}" for k, v in ck.items()) or "no checks recorded"
+    if name == "sc_recall":
+        return f"{len(d.get('decisions', []))} earlier decision(s) about the same advisories in other apps"
     if name == "critical_nodes":
         return "Top by PageRank: " + ", ".join(f"{c['uid'].split(':', 1)[1].replace('opentelemetry-', 'otel-')} ({c['pagerank']:.4f}, {c.get('dependents', '?')} dependents)" for c in d.get("critical", [])[:3])
     if name == "dependent_owners":
@@ -223,6 +237,9 @@ def _find_target(r: Run, text: str):
 
 def pipeline(r: Run, text: str):
     """Same tools, fixed order, templated claims. Zero LLM cost."""
+    if r.graph.startswith("sc_"):
+        from ..supply import agent as supply_agent
+        return supply_agent.pipeline(r, text)
     is_trace = "Traceback" in text or 'File "' in text
     origin, frame_nodes, tr, cands = None, [], None, []
     if re.search(r"^\s+at [\w.$<>]+\(.*\)|Caused by: |\.java:\d+|\.go:\d+|\.js:\d+:\d+", text, re.M) and not is_trace:
@@ -359,7 +376,7 @@ def investigate(graph, text, emit, use_llm=True, remember=True):
             return None
         ans, seeds, shas = out
         final = r.finalize(ans)
-        if remember:
+        if remember and not r.graph.startswith("sc_"):
             record(r, text, seeds, shas, final)
         r.send("run_finished", answer=final, ms=round((time.perf_counter() - t0) * 1000), usage=r.tokens, cost_usd=0)
         return final
@@ -445,9 +462,9 @@ def _agent(r: Run, text: str, t0, remember):
         r.send("error", message="agent did not produce a final answer; using the deterministic answer", recoverable=True)
         final_input = draft
     final_input = _keep_top_cause(final_input, draft)
-    final_input = dict(final_input, actions=draft["actions"])   # actions are graph-derived; the LLM verifies them, it does not invent them
+    final_input = dict(final_input, actions=draft["actions"], extras=draft.get("extras"))   # actions are graph-derived; the LLM verifies them, it does not invent them
     final = r.finalize(final_input)
-    if remember and seeds:
+    if remember and seeds and not r.graph.startswith("sc_"):
         seeds = [s for s in seeds if s]
         record(r, text, seeds, shas, final)
     r.send("run_finished", answer=final, ms=round((time.perf_counter() - t0) * 1000), usage=r.tokens, cost_usd=round(r.cost, 4))

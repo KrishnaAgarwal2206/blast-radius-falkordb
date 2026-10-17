@@ -1,15 +1,18 @@
 // Blast Radius UI — vanilla ES module, force-graph via CDN. Everything shown comes from the SSE stream / REST API.
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const PALETTE = { Repo: '#F0E442', Service: '#56B4E9', File: '#A3B1C6', Class: '#CC79A7', Function: '#2FBF9A', Package: '#E69F00', Person: '#C4B5FD', Commit: '#7C8CF8', Incident: '#FF5A4A' };
+const PALETTE = { Repo: '#F0E442', Service: '#56B4E9', File: '#A3B1C6', Class: '#CC79A7', Function: '#2FBF9A', Package: '#E69F00', Person: '#C4B5FD', Commit: '#7C8CF8', Incident: '#FF5A4A', Vulnerability: '#FF3B6B', Decision: '#9AD1FF' };
 const SCENARIOS = [
-  { id: 'trace', label: '2 AM: metrics stopped exporting', sub: 'paste a real stack trace — periodic reader collect timeout', replay: 'scenario3',
-    input: "Exception in thread Thread-3 (_ticker):\nTraceback (most recent call last):\n  File \"/usr/local/lib/python3.12/threading.py\", line 1075, in _bootstrap_inner\n    self.run()\n  File \"/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/export/__init__.py\", line 496, in _ticker\n    self.collect(timeout_millis=self._export_timeout_millis)\n  File \"/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/export/__init__.py\", line 316, in collect\n    metrics = self._collect(self, timeout_millis=timeout_millis)\n  File \"/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/measurement_consumer.py\", line 95, in collect\n    remaining_time = deadline_ns - time_ns()\nTimeoutError: Timed out while executing callback" },
-  { id: 'svc', label: 'Service down', sub: 'opentelemetry-exporter-otlp-proto-grpc fails at startup', input: 'opentelemetry-exporter-otlp-proto-grpc', replay: 'scenario1' },
-  { id: 'change', label: 'I’m changing this file', sub: 'sdk/metrics/_internal/view.py — blast radius + recurring defects', input: 'opentelemetry-sdk/src/opentelemetry/sdk/metrics/_internal/view.py', replay: 'scenario2' },
+  { id: 'httpie', graph: 'sc_httpie', label: 'The scanner says 25. How many are exploitable?', sub: 'HTTPie 2.6.0 on an unrefreshed lockfile: reachability, a safe fix, and a fix that breaks the app', input: 'triage', replay: 'supply-httpie' },
+  { id: 'yaml', chain: ['sc_precommit', 'sc_yamlfull'], label: 'Same CRITICAL CVE, two apps', sub: 'PyYAML 5.3.1: pre-commit (safe loader) vs a FullLoader app. Same alert, different verdict', input: 'triage', replay: 'supply-yaml' },
+  { id: 'trace', graph: 'otel', label: 'Incident mode: 2 AM stack trace', sub: 'v1 engine on OpenTelemetry-Python: failing function, blame-attributed cause, who to page', replay: 'scenario3',
+    input: '' },
 ];
 const S = { maxPR: 1, graph: 'otel', nodes: new Map(), links: new Map(), paths: {}, claims: [], active: null, lens: 'label', depth: new Map(), base: new Map(),
   q: { n: 0, ms: 0, list: [] }, es: null, pendingGroup: null, lit: new Map(), litLinks: new Map(), recalled: new Set(), replay: null, lastInput: null };
+const KIND = { code: { impact: 'Impact', cause: 'Likely cause', page: 'Who to page', similar: 'Similar incident', critical: 'Single point of failure', memory: 'Memory' },
+  supply: { impact: 'Triage', cause: 'Reachable', page: 'Owner', similar: 'No path found', critical: 'Fix', memory: 'Memory' } };
+const kindLabel = (k) => (KIND[S.graph?.startsWith('sc_') ? 'supply' : 'code'][k] || k);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------------------------------------------------------------- graph
@@ -121,20 +124,27 @@ async function loadOverview() {
     o.queries.forEach((q) => S.overviewQ = (S.overviewQ || []).concat(q));
   } catch (e) { S.baseErr = e; }
 }
+function heroFor() {
+  const sup = S.graph?.startsWith('sc_');
+  $('heroH').textContent = sup ? 'Which alerts can actually be exploited?' : 'What breaks if this changes?';
+  $('heroP').innerHTML = sup ? 'Your scanner flags every vulnerable package version. Blast Radius walks a <b>FalkorDB</b> graph of your code, its dependencies and their call paths to show which advisories have a <b>demonstrable route from an entry point</b> to the vulnerable function, then plans and checks the smallest fix.'
+    : 'Paste a stack trace or name a service. An agent walks a live <b>FalkorDB</b> graph of code, commits, owners and past incidents, and every claim links to the exact path.';
+  $('inp').placeholder = sup ? 'Type "triage", or a CVE id such as CVE-2020-14343' : 'Paste a Python stack trace, or name a service / file / function';
+}
 async function loadMeta() {
   try {
     const repos = await (await fetch('/api/repos')).json();
-    $('repo').innerHTML = repos.map((r) => `<option value="${esc(r.graph)}"${r.graph === S.graph ? ' selected' : ''}>${esc(r.graph)} (${r.nodes.toLocaleString()} nodes)</option>`).join('');
+    S.repos = repos; $('repo').innerHTML = repos.map((r) => `<option value="${esc(r.graph)}"${r.graph === S.graph ? ' selected' : ''}>${esc(r.title || r.graph)} (${r.nodes.toLocaleString()} nodes)</option>`).join('');
     if (!repos.find((r) => r.graph === S.graph) && repos[0]) { S.graph = repos[0].graph; }
     const st = await (await fetch(`/api/graph/${S.graph}/stats`)).json();
     const nn = Object.values(st.nodes).reduce((a, b) => a + b, 0), ee = Object.values(st.edges).reduce((a, b) => a + b, 0);
     $('heroStat').textContent = `${nn.toLocaleString()} nodes · ${ee.toLocaleString()} edges · ${Object.keys(st.nodes).length} labels · FalkorDB`;
     $('pill').className = 'pill live'; $('pill').textContent = 'LIVE';
-    S.online = true;
+    S.online = true; heroFor();
   } catch (e) { S.online = false; $('heroStat').textContent = 'API/FalkorDB not reachable — demo scenarios will play recorded replays'; }
   loadMemory();
 }
-$('repo').onchange = async (e) => { S.es?.close(); S.graph = e.target.value; reset(); await loadOverview(); loadMeta(); };
+$('repo').onchange = async (e) => { S.es?.close(); S.graph = e.target.value; reset(); await loadOverview(); loadMeta(); heroFor(); };
 
 // ---------------------------------------------------------------- run lifecycle
 function reset() {
@@ -160,7 +170,7 @@ async function start(input, { llm = false, replay = null } = {}) {
     url = `/api/runs/${(await r.json()).run_id}/events`;
   }
   const es = new EventSource(url); S.es = es; let got = false;
-  es.onmessage = (m) => { got = true; const e = JSON.parse(m.data); push(e); if (e.type === 'run_finished') es.close(); };
+  es.onmessage = (m) => { got = true; const e = JSON.parse(m.data); push(e); if (e.type === 'run_finished') { es.close(); const nx = S.afterRun; S.afterRun = null; if (nx) setTimeout(nx, 2500); } };
   es.onerror = () => { es.close(); if (!got) fail('Event stream failed.', input); };
 }
 function fail(msg, input) {
@@ -257,11 +267,39 @@ function focusPaths(pids, nids, btn) {
   fitTo((n) => nodes.has(n.id), 110);
 }
 const sect = (t, sub) => `<h4 class="sec">${t}${sub ? ` <small>${sub}</small>` : ''}</h4>`;
+function renderTriage(x, box) {
+  const t = x.scanner.total, c = x.counts, pct = (n) => `${(100 * n / t).toFixed(1)}%`;
+  box.insertAdjacentHTML('beforeend', `<div class="tri"><div class="trih"><b>${t}</b> advisories match the pinned versions <small>(what a package-name scanner reports, ${x.scanner.high_or_critical} high/critical)</small></div>
+    <div class="bar3"><i class="r" style="width:${pct(c.reachable)}" title="reachable"></i><i class="n" style="width:${pct(c.no_path_found)}" title="no path found"></i><i class="u" style="width:${pct(c.unknown)}" title="unknown"></i></div>
+    <div class="trik"><span><i class="r"></i><b>${c.reachable}</b> reachable</span><span><i class="n"></i><b>${c.no_path_found}</b> no path found</span><span><i class="u"></i><b>${c.unknown}</b> unknown</span></div>
+    <small>"No path found" means none within the analyzed static scope; it is never claimed as "not exploitable". "Unknown" means the vulnerable function could not be identified.</small></div>`);
+}
+function renderAdvisories(x, box, V) {
+  box.insertAdjacentHTML('beforeend', sect('All advisories', 'click a row to see its path'));
+  const lab = { reachable: 'REACHABLE', no_path_found: 'NO PATH', unknown: 'UNKNOWN' };
+  x.findings.forEach((f) => {
+    const b = document.createElement('button'); b.className = `adv ${f.verdict}`; b.setAttribute('aria-pressed', 'false');
+    b.innerHTML = `<span class="vd">${lab[f.verdict]}</span><span class="av"><b>${esc(f.id)}</b> ${esc(f.package)} ${esc(f.version)} <small>${esc(f.severity)}${f.cvss ? ' ' + f.cvss : ''}${f.function ? ' · ' + esc(f.function) : ''}${f.hops ? ' · ' + f.hops + ' hops' : ''}${f.fixed?.length ? ' · fixed in ' + esc(f.fixed[0]) : ''}</small></span>`;
+    b.onclick = () => f.path_id && focusPaths([f.path_id], [], b); box.appendChild(b);
+  });
+  const ck = x.checks || {};
+  if (Object.keys(ck).length) {
+    box.insertAdjacentHTML('beforeend', sect('Verification: smoke checks', 'run in throw-away venvs; separate from the "fixed" claim'));
+    Object.entries(ck).forEach(([k, v]) => {
+      const d = document.createElement('div'); d.className = 'chk2';
+      d.innerHTML = `<div><b>${esc(k === 'baseline' ? 'baseline (current pins)' : 'with upgrade: ' + k)}</b> <span class="bdg ${v.ok ? 'ok' : 'bad'}">${v.ok ? 'PASS' : v.install_ok === false ? 'NOT INSTALLABLE' : 'FAIL'}</span></div>` +
+        (v.checks?.length ? v.checks.map((c) => `<div class="cl ${c.ok ? 'ok' : 'bad'}">${c.ok ? '✓' : '✗'} ${esc(c.title)}${c.ok ? '' : `<small>${esc(c.tail)}</small>`}</div>`).join('') : `<small>${esc(v.install_error || '')}</small>`);
+      box.appendChild(d);
+    });
+    box.insertAdjacentHTML('beforeend', `<small class="dim">Checks precomputed ${x.precomputed_at ? new Date(x.precomputed_at * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : ''}. Smoke checks are not the app's full test suite.</small>`);
+  }
+}
 function finish(e) {
   const a = e.answer, box = $('tab-answer'); if (!S.userTab) selectTab('answer');
   if (!a) { box.innerHTML = `<div class="err-box"><b>No answer.</b> ${esc(S.lastError || 'Nothing in the graph matched that input. Try a service name such as opentelemetry-sdk, or paste a Python traceback.')}</div>`; return; }
   const V = a.llm_verification || {};
   box.innerHTML = `<div class="summary">${esc(a.summary)}</div><div class="meta">${e.ms ?? ''} ms · ${S.q.n} FalkorDB queries (${S.q.ms.toFixed(1)} ms) · LLM cost $${e.cost_usd ?? 0}${Object.keys(V).length ? ' · LLM verification on' : ''}</div>`;
+  if (a.extras) renderTriage(a.extras, box);
   // 1. diagnosis trail
   if (a.diagnosis?.length) {
     box.insertAdjacentHTML('beforeend', sect('Diagnosis: what the agent did', 'click a step to see its paths'));
@@ -276,7 +314,7 @@ function finish(e) {
   a.claims.forEach((c) => {
     const b = document.createElement('button'); b.className = 'claim'; b.setAttribute('aria-pressed', 'false');
     const ps = c.path_ids.map((p) => S.paths[p]?.sentence).filter(Boolean);
-    b.innerHTML = `<span class="kind">${esc(c.kind)}</span><br>${esc(c.text)}${ps.map((s) => `<span class="path">${esc(s)}</span>`).join('')}`;
+    b.innerHTML = `<span class="kind">${esc(kindLabel(c.kind))}</span><br>${esc(c.text)}${ps.map((s) => `<span class="path">${esc(s)}</span>`).join('')}`;
     b.onclick = () => focusPaths(c.path_ids, c.node_ids, b); box.appendChild(b);
   });
   // 3. recommended actions
@@ -292,6 +330,7 @@ function finish(e) {
       box.appendChild(b);
     });
   }
+  if (a.extras) renderAdvisories(a.extras, box, V);
   const n = Object.values(S.paths).length; feed(`Done. ${a.claims.length} findings, ${(a.actions || []).length} actions, ${n} evidence paths.`, 't');
   if (a.dropped_unverified_claims) feed(`${a.dropped_unverified_claims} item(s) dropped: no supporting graph path`, 'e');
   setTimeout(() => fitTo((n) => S.lit.has(n.id), 80, 1.6), 300);
@@ -351,8 +390,8 @@ $('mClose').onclick = () => ($('modal').hidden = true);
 async function loadMemory() {
   try {
     const inc = await (await fetch(`/api/incidents?graph=${S.graph}&limit=200`)).json();
-    $('memCount').textContent = `(${inc.length} incidents)`;
-    $('memBody').innerHTML = inc.map((i) => `<div class="inc${S.recalled.has(i.id) ? ' recalled' : ''}" data-inc="${esc(i.id)}"><b>${esc((i.title || '').slice(0, 80))}</b><small>${esc(i.id)} · ${i.source} · ${new Date(i.ts * 1000).toISOString().slice(0, 10)}${i.cause ? ' · cause ' + esc(i.cause.slice(0, 8)) : ''}</small><br><button class="ghost" data-pull="${esc(i.id)}">Pull into graph</button></div>`).join('');
+    $('memCount').textContent = `(${inc.length} ${S.graph?.startsWith('sc_') ? 'decisions, shared across apps' : 'incidents'})`;
+    $('memBody').innerHTML = inc.map((i) => `<div class="inc${S.recalled.has(i.id) ? ' recalled' : ''}" data-inc="${esc(i.id)}"><b>${esc((i.title || '').slice(0, 80))}</b><small>${esc(i.id)} · ${i.source} · ${new Date(i.ts * 1000).toISOString().slice(0, 10)}${i.cause ? ' · cause ' + esc(i.cause.slice(0, 8)) : ''}</small>${i.source === 'decision' ? '' : `<br><button class="ghost" data-pull="${esc(i.id)}">Pull into graph</button>`}</div>`).join('');
     $('memBody').querySelectorAll('[data-pull]').forEach((b) => (b.onclick = async () => {
       const id = 'Incident:' + b.dataset.pull; $('hero').classList.add('gone');
       const base = await (await fetch(`/api/graph/${S.graph}/subgraph?ids=${encodeURIComponent(id)}`)).json(); addNodes(base.nodes.map((n) => ({ ...n, key: n.id.split(':').slice(1).join(':'), name: (n.props.title || '').slice(0, 40) })));
@@ -365,7 +404,16 @@ $('memToggle').onclick = () => { $('memBody').hidden = !$('memBody').hidden; siz
 // ---------------------------------------------------------------- wiring
 $('chips').innerHTML = SCENARIOS.map((s, i) => `<button class="chip" data-i="${i}">${esc(s.label)}<small>${esc(s.sub)}</small></button>`).join('');
 document.querySelectorAll('.chip').forEach((b) => (b.onclick = () => { const s = SCENARIOS[+b.dataset.i]; runScenario(s); }));
-function runScenario(s) { $('inp').value = s.input; start(s.input, { llm: $('llm').checked, replay: S.online ? null : s.replay }); }
+async function runScenario(s) {
+  const steps = (s.chain || [s.graph || S.graph]).map((g) => ({ graph: g, input: s.input }));
+  const go = async (i) => {
+    const st = steps[i];
+    if (st.graph !== S.graph) { S.graph = st.graph; $('repo').value = st.graph; reset(); await loadOverview(); heroFor(); loadMemory(); }
+    $('inp').value = st.input; S.afterRun = i + 1 < steps.length ? () => go(i + 1) : null;
+    start(st.input, { llm: $('llm').checked, replay: S.online ? null : (s.chain ? `${s.replay}-${i}` : s.replay) });
+  };
+  go(0);
+}
 $('go').onclick = () => { const v = $('inp').value.trim(); if (!v) { $('inp').focus(); return; } start(v, { llm: $('llm').checked }); };
 $('inp').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('go').click(); });
 $('heroGo').onclick = () => runScenario(SCENARIOS[0]);

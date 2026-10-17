@@ -39,3 +39,8 @@
 - Alternatives: React/Vite. Why: zero build step, works offline, one Docker layer, faster to iterate under the deadline.
 
 ## D13. Claims are verified server-side (path exists, and every sha/incident id in the text appears in the cited paths); incidents equal to a suspect's own fix commit are excluded from recall as circular.
+
+## D14. Pivot to Reachability-to-Repair (PM verdict, 2026-10-17); v1 incident engine kept as second mode
+- Gate result: 5/5. (1) OSV advisories + fixed versions; (2) vulnerable function inferred from the fix commit's changed functions (25/50 httpie advisories, 5/9 pre-commit); (3) real entry->vuln paths (httpie `core.main -> program -> collect_messages -> Session.send -> rebuild_proxies`); (4) upgrade planner (below); (5) graph changes the verdict: PyYAML 5.3.1 CVE-2020-14343 is reachable in a FullLoader app and has no path in pre-commit (SafeLoader), proven with a positive control.
+- Three verdicts only: reachable / no path found within analyzed scope / unknown. "No path" is never "not exploitable".
+- Static analysis limits are disclosed: dynamic dispatch not followed except class-valued parameters, functools.partial, and handlers registered on classes (call-site sensitive).

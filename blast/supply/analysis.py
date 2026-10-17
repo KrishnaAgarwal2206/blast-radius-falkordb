@@ -50,13 +50,25 @@ def verdicts(graph: str) -> Result:
                                f"WHERE p IS NOT NULL RETURN length(p), {PATH_PROJ} ORDER BY length(p) LIMIT 1", {"q": fq}, timeout=30000)
             if r.rows and (best is None or r.rows[0][0] < best[0]):
                 best = (r.rows[0][0], r.rows[0][1], r.rows[0][2], fq)
+        vuid = uid("Vulnerability", vid)
+        res.nodes.setdefault(vuid, dict(label="Vulnerability", key=vid, name=vid))
         if best:
             item["verdict"] = "reachable"
             item["path_id"] = res.add_path(best[1], best[2], pid=f"reach{len(out) + 1}")
             item["hops"] = best[0]
             item["target"] = best[3]
+            res.edges.append((vuid, "VULNERABLE_IN", uid("Function", best[3])))
         elif fns:
             item["verdict"] = "no_path_found"
+            # evidence of what the analysis DID reach: the closest function in the same file as the vulnerable one
+            r = _q(res, graph, "MATCH (v:Function {qname:$q})<-[:DEFINES]-(f:File)-[:DEFINES]->(s:Function) WHERE s.qname <> $q "
+                               "WITH s MATCH (e:Function {entry:true}) WITH e, s, shortestPath((e)-[:CALLS*..25]->(s)) AS p WHERE p IS NOT NULL "
+                               f"RETURN length(p), {PATH_PROJ} ORDER BY length(p) LIMIT 1", {"q": fns[0]}, timeout=30000)
+            if r.rows:
+                item["sibling_path_id"] = res.add_path(r.rows[0][1], r.rows[0][2], pid=f"nopath{len(out) + 1}")
+                item["sibling"] = r.rows[0][1][-1][1]
+            res.edges.append((vuid, "VULNERABLE_IN", uid("Function", fns[0])))
+            res.nodes.setdefault(uid("Function", fns[0]), dict(label="Function", key=fns[0], name=fns[0]))
         else:
             item["verdict"] = "unknown"
         out.append(item)

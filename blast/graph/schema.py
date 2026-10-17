@@ -2,11 +2,11 @@
 from .client import run
 
 INDEXES = [("Repo", "name"), ("Service", "name"), ("File", "path"), ("Class", "qname"), ("Function", "qname"),
-           ("Package", "name"), ("Person", "email"), ("Commit", "sha"), ("Incident", "id")]
+           ("Package", "name"), ("Person", "email"), ("Commit", "sha"), ("Incident", "id"), ("Vulnerability", "id"), ("Decision", "id")]
 KEY = {l: p for l, p in INDEXES}
 LABELS = [l for l, _ in INDEXES]
 REL_TYPES = ["CONTAINS", "DEFINES", "IMPORTS", "CALLS", "DEPENDS_ON", "OWNS", "AUTHORED", "MODIFIED",
-             "AFFECTED", "CAUSED_BY", "RESOLVED_BY", "SIMILAR_TO"]
+             "AFFECTED", "CAUSED_BY", "RESOLVED_BY", "SIMILAR_TO", "EXTENDS", "AFFECTED_BY", "VULNERABLE_IN", "ABOUT"]
 
 
 def create_indexes(graph: str):

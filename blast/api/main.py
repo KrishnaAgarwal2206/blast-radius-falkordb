@@ -47,14 +47,29 @@ def health():
 
 @app.get("/api/repos")
 def repos():
+    from ..supply.apps import APPS
     out = []
     for g in list_graphs():
+        if g == "sc_memory":
+            continue
         try:
             n = run(g, "MATCH (n) RETURN count(n)").rows[0][0]
-            out.append({"graph": g, "nodes": n})
+            kind = "supply" if g.startswith("sc_") else "code"
+            title = APPS.get(g[3:], {}).get("title", g) if kind == "supply" else g
+            out.append({"graph": g, "nodes": n, "kind": kind, "title": title})
         except Exception:
             continue
-    return out
+    return sorted(out, key=lambda x: (x["kind"] != "supply", x["graph"]))
+
+
+@app.get("/api/supply/{app_name}")
+def supply_summary(app_name: str):
+    """Precomputed supply-chain snapshot: scanner view vs graph view, remediation plan and smoke-check results."""
+    from ..supply import pipeline as P
+    snap = P.load(app_name)
+    if not snap:
+        raise HTTPException(404, f"no supply snapshot for '{app_name}'. Run: python -m blast.supply.pipeline {app_name}")
+    return {k: snap[k] for k in ("app", "title", "ts", "counts", "total", "scanner", "plan", "checks", "pins")}
 
 
 def _require_graph(g):
@@ -110,6 +125,12 @@ def overview(g: str):
                   files=f) for n, f in q("MATCH (s:Service) OPTIONAL MATCH (s)-[:CONTAINS]->(f:File) RETURN s.name, count(f)")]
     edges = [dict(id=f"Service:{a}|DEPENDS_ON|Service:{b}", source=f"Service:{a}", target=f"Service:{b}", type="DEPENDS_ON")
              for a, b in q("MATCH (a:Service)-[:DEPENDS_ON]->(b:Service) RETURN a.name, b.name")]
+    if g.startswith("sc_"):
+        vc = dict(q("MATCH (s:Service)-[:AFFECTED_BY]->(x:Vulnerability) RETURN s.name, count(x)"))
+        ver = dict(q("MATCH (s:Service) RETURN s.name, s.version"))
+        for n in nodes:
+            nm = n["id"].split(":", 1)[1]
+            n["vulns"], n["version"] = vc.get(nm, 0), ver.get(nm)
     return {"nodes": nodes, "edges": edges, "queries": qs}
 
 
@@ -156,6 +177,12 @@ def expand(g: str, id: str, limit: int = 25):
 @app.get("/api/incidents")
 def incidents(graph: str = config.DEFAULT_GRAPH, limit: int = 50):
     _require_graph(graph)
+    if graph.startswith("sc_"):   # supply mode: the memory is the shared set of verdicts (Decision nodes) made in any app
+        try:
+            r = run("sc_memory", "MATCH (d:Decision) RETURN d.id, d.vuln, d.app, d.verdict, d.ts, d.package ORDER BY d.ts DESC, d.vuln LIMIT $n", {"n": min(limit, 200)})
+        except Exception:
+            return []
+        return [dict(id=a, title=f"{b} in {c}: {d.replace('_', ' ')} ({f})", ts=e, source="decision", cause=None) for a, b, c, d, e, f in r.rows]
     r = run(graph, "MATCH (i:Incident) OPTIONAL MATCH (i)-[:CAUSED_BY]->(c:Commit) "
                    "RETURN i.id, i.title, i.ts, i.source, c.sha ORDER BY i.ts DESC LIMIT $n", {"n": min(limit, 200)})
     return [dict(id=a, title=b, ts=c, source=d, cause=e) for a, b, c, d, e in r.rows]

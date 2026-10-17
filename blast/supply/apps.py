@@ -3,13 +3,13 @@ from .. import config
 
 APPS = {
     "httpie": dict(
-        title="HTTPie 2.6.0", repo=str(config.ROOT / "data" / "apps" / "httpie"), pkg_dirs=["httpie"],
+        title="HTTPie 2.6.0", git="https://github.com/httpie/httpie", tag="2.6.0", repo=str(config.ROOT / "data" / "apps" / "httpie"), pkg_dirs=["httpie"],
         pins=str(config.ROOT / "data" / "apps" / "httpie.pins.txt"),
         requires={"requests": ">=2.22.0", "pygments": ">=2.5.2", "requests-toolbelt": ">=0.9.1", "charset-normalizer": ">=2.0.0",
                   "defusedxml": ">=0.6.0", "setuptools": "", "pysocks": ">=1.5.6"},
         entries=["httpie.__main__.main", "httpie.core.main"]),
     "precommit": dict(
-        title="pre-commit 2.9.0", repo=str(config.ROOT / "data" / "apps" / "precommit"), pkg_dirs=["pre_commit"],
+        title="pre-commit 2.9.0", git="https://github.com/pre-commit/pre-commit", tag="v2.9.0", repo=str(config.ROOT / "data" / "apps" / "precommit"), pkg_dirs=["pre_commit"],
         pins=str(config.ROOT / "data" / "apps" / "precommit.pins.txt"),
         requires={"cfgv": ">=2.0.0", "identify": ">=1.0.0", "nodeenv": ">=0.11.1", "pyyaml": ">=5.1", "toml": "", "virtualenv": ">=20.0.8"},
         entries=["pre_commit.main.main", "pre_commit.clientlib.validate_config_main", "pre_commit.clientlib.validate_manifest_main"]),
@@ -19,3 +19,8 @@ APPS = {
         entries=["yamlfull.config.main"]),
 }
 ROUTE_DECOS = ("route", ".get", ".post", ".put", ".delete", ".patch", "websocket", "command", "task", "endpoint")
+
+# Interpreter used for the smoke checks (the 2020-2021 era pins break on 3.12, e.g. old setuptools/pkg_resources)
+import os as _os
+RUNNER_PYTHON = _os.getenv("RUNNER_PYTHON", r"C:\Program Files\Python311\python.exe")
+RUNNER_TAG = _os.getenv("RUNNER_TAG", "cp311")

@@ -1,0 +1,168 @@
+"""Supply-chain mode of the agent: tools + the deterministic investigation pipeline that produces Diagnosis / Findings / Actions."""
+import difflib
+import json
+
+from ..analysis.core import Result, _q, short, uid
+from . import pipeline as P
+from . import planner
+from .analysis import verdicts
+from .apps import APPS
+
+
+def app_of(graph: str) -> str:
+    return graph[3:] if graph.startswith("sc_") else graph
+
+
+# ------------------------------------------------------------------ tools (each returns a core.Result)
+def t_findings(graph, args):
+    res = verdicts(graph)
+    return res
+
+
+def t_plan(graph, args):
+    app = app_of(graph)
+    snap = P.load(app)
+    findings = args.get("findings") or (snap or {}).get("findings") or verdicts(graph).data["findings"]
+    res = planner.plan(graph, findings, P.pins_of(app), scope=tuple(args.get("scope", ["reachable"])))
+    return res
+
+
+def t_checks(graph, args):
+    """Smoke-check results for each upgrade candidate (precomputed in a throw-away venv; see data/supply/<app>.json)."""
+    res = Result("sc_checks")
+    snap = P.load(app_of(graph))
+    res.data["checks"] = (snap or {}).get("checks", {})
+    res.data["precomputed_at"] = (snap or {}).get("ts")
+    return res
+
+
+def t_recall(graph, args):
+    res = Result("sc_recall")
+    app = app_of(graph)
+    ids = args.get("vulns", [])
+    rows = []
+    if ids:
+        r = _q(res, P.MEMORY_GRAPH, "MATCH (d:Decision)-[:ABOUT]->(v:Vulnerability) WHERE v.id IN $ids AND d.app <> $app "
+                                    "RETURN d.id, d.app, d.vuln, d.package, d.version, d.verdict, d.why, d.ts ORDER BY d.ts DESC", {"ids": ids, "app": app})
+        rows = [dict(zip(["id", "app", "vuln", "package", "version", "verdict", "why", "ts"], x)) for x in r.rows]
+        for d in rows:
+            res.nodes[uid("Decision", d["id"])] = dict(label="Decision", key=d["id"], name=f"{d['app']}: {d['vuln']} -> {d['verdict']}")
+    res.data["decisions"] = rows
+    return res
+
+
+# ------------------------------------------------------------------ pipeline
+def diff_pins(old: dict, new: dict, cands):
+    a = [f"{k}=={v}" for k, v in sorted(old.items())]
+    b = [f"{k}=={new.get(k, v)}" for k, v in sorted(old.items())]
+    return "".join(difflib.unified_diff([x + "\n" for x in a], [x + "\n" for x in b], "requirements.lock", "requirements.lock (proposed)", n=0))
+
+
+def pipeline(r, text):
+    app = app_of(r.graph)
+    spec = APPS[app]
+    fr, _ = r.call("sc_findings", {}, "t1")
+    if not fr or not fr.data.get("findings"):
+        r.send("error", message="No advisories match the pinned versions of this app.", recoverable=False)
+        return None
+    F = fr.data["findings"]
+    reach = [f for f in F if f["verdict"] == "reachable"]
+    nopath = [f for f in F if f["verdict"] == "no_path_found"]
+    unknown = [f for f in F if f["verdict"] == "unknown"]
+    pr, _ = r.call("sc_plan", {"findings": F}, "t2")
+    cands = pr.data["candidates"] if pr else []
+    cr, _ = r.call("sc_checks", {}, "t3")
+    checks = cr.data["checks"] if cr else {}
+    mr, _ = r.call("sc_recall", {"vulns": [f["id"] for f in reach + nopath]}, "t4")
+    decisions = mr.data["decisions"] if mr else []
+    pins = P.pins_of(app)
+    hc = sum(1 for f in F if f["severity"] in ("HIGH", "CRITICAL"))
+
+    def vnodes(f):
+        out = [uid("Vulnerability", f["id"])]
+        if f.get("target"):
+            out.append(uid("Function", f["target"]))
+        return out
+
+    claims, actions = [], []
+    claims.append(dict(kind="impact", text=f"{len(F)} advisories match {spec['title']}'s pinned versions ({hc} high/critical): a package-name scanner would flag all of them. "
+                                          f"Graph analysis: {len(reach)} reachable from an entry point, {len(nopath)} with no path found in the analyzed scope, {len(unknown)} unknown "
+                                          f"(vulnerable function could not be identified).",
+                       path_ids=[f["path_id"] for f in reach[:3]] or [f["sibling_path_id"] for f in nopath if f.get("sibling_path_id")][:3],
+                       node_ids=[uid("Vulnerability", f["id"]) for f in F[:60]]))
+    for f in sorted(reach, key=lambda x: -(x["cvss"] or 0))[:4]:
+        claims.append(dict(kind="cause", text=f"{f['id']} ({f['package']} {f['version']}, {f['severity']}{', CVSS ' + str(f['cvss']) if f['cvss'] else ''}) is REACHABLE: "
+                                              f"{f['hops']} call hops from an entry point to {short('Function:' + f['target'])}, a function changed by the advisory's fix commit.",
+                           path_ids=[f["path_id"]], node_ids=vnodes(f)))
+    for f in sorted(nopath, key=lambda x: -(x["cvss"] or 0))[:2]:
+        if f.get("sibling_path_id"):
+            claims.append(dict(kind="similar", text=f"{f['id']} ({f['package']} {f['version']}, {f['severity']}{', CVSS ' + str(f['cvss']) if f['cvss'] else ''}) has NO PATH FOUND within the analyzed scope: "
+                                                    f"the app does reach {short('Function:' + f['sibling'])} in the same file, but not the vulnerable {short('Function:' + f['functions'][0])}. "
+                                                    f"This is a static-analysis result, not a proof of non-exploitability.",
+                               path_ids=[f["sibling_path_id"]], node_ids=[uid("Vulnerability", f["id"])]))
+    for d in decisions[:2]:
+        mine = next((f for f in F if f["id"] == d["vuln"]), None)
+        if mine and (mine.get("path_id") or mine.get("sibling_path_id")):
+            claims.append(dict(kind="memory", text=f"Memory: {d['vuln']} was previously assessed in {d['app']} ({d['package']} {d['version']}) as '{d['verdict']}'. "
+                                                   f"Here it is '{mine['verdict']}': same advisory, different evidence.",
+                               path_ids=[mine.get("path_id") or mine["sibling_path_id"]], node_ids=[uid("Vulnerability", d["vuln"])]))
+    upgrades = {}
+    for c in cands:
+        ck = checks.get(c["package"], {})
+        passed = bool(ck.get("checks")) and all(x["ok"] for x in ck["checks"])
+        failed = [x for x in ck.get("checks", []) if not x["ok"]]
+        if c.get("to_version"):
+            if passed:
+                upgrades[c["package"]] = c["to_version"]
+            state = "smoke checks PASS" if passed else (f"smoke checks FAIL ({failed[0]['tail'][:90]})" if failed else "checks not run")
+            claims.append(dict(kind="critical", text=f"Upgrade {c['package']} {c['from_version']} -> {c['to_version']} ({c['jump']}) clears {', '.join(c['cleared_in_scope'])} "
+                                                     f"(reachable). {c['constraints_checked']} dependent constraint(s) from the graph satisfied; {state}.",
+                               path_ids=c["path_ids"][:3], node_ids=[uid("Service", c["package"])] + [uid("Vulnerability", x) for x in c["cleared_in_scope"]]))
+        else:
+            claims.append(dict(kind="critical", text=f"No installable upgrade for {c['package']} {c['from_version']} clears {', '.join(c['findings'])}: "
+                                                     f"{c['blocked'][0][1] if c['blocked'] else 'blocked'}.",
+                               path_ids=[f["path_id"] for f in reach if f["package"] == c["package"]][:3], node_ids=[uid("Service", c["package"])]))
+    # ---- actions (drafts; nothing is executed)
+    for c in cands:
+        ck = checks.get(c["package"], {})
+        passed = bool(ck.get("checks")) and all(x["ok"] for x in ck["checks"])
+        pids = c.get("path_ids", [])[:3]
+        if c.get("to_version") and passed:
+            actions.append(dict(kind="mitigate", title=f"Pin {c['package']}=={c['to_version']}", detail=f"Clears {', '.join(c['cleared_in_scope'])}. Smoke checks passed in a throw-away venv ({len(ck['checks'])}/{len(ck['checks'])}); this is not the app's full test suite.",
+                                command=f"pip install {c['package']}=={c['to_version']}", path_ids=pids, risk=f"{c['jump']} version bump"))
+        elif c.get("to_version"):
+            fail = next((x for x in ck.get("checks", []) if not x["ok"]), None)
+            actions.append(dict(kind="review", title=f"Do NOT pin {c['package']}=={c['to_version']} yet", detail=f"It would clear {', '.join(c['cleared_in_scope'])} but the app's smoke checks fail: {fail['tail'][:140] if fail else 'not run'}. "
+                                                                                                                   f"Needs an app change (upgrade the app or patch its use of {c['package']}).", path_ids=pids, risk="breaks the app as pinned"))
+    if upgrades:
+        patch = diff_pins(pins, upgrades, cands)
+        top = next((f for f in reach if f["package"] in upgrades), reach[0] if reach else None)
+        actions.append(dict(kind="inspect", title="Proposed lockfile change (unified diff)", detail=patch, command="git apply requirements.patch", path_ids=[top["path_id"]] if top and top.get("path_id") else [], risk="draft; review before applying"))
+        ids = [x for c in cands if c["package"] in upgrades for x in c["cleared_in_scope"]]
+        actions.append(dict(kind="message", title="Draft pull request description",
+                            detail=f"Security: bump {', '.join(f'{k} to {v}' for k, v in upgrades.items())}. Clears reachable advisories {', '.join(ids)}. Evidence: call path(s) from an application entry point to the advisory's vulnerable function (see linked graph paths). "
+                                   f"Checked: app smoke checks pass on the proposed pins. Not checked: the full test suite. Out of scope: {len(nopath)} advisories with no path found and {len(unknown)} unknown.",
+                            path_ids=[next(f for f in reach if f["id"] in ids)["path_id"]] if ids else [], risk="none"))
+    for f in sorted(nopath, key=lambda x: -(x["cvss"] or 0))[:2]:
+        if f.get("sibling_path_id"):
+            actions.append(dict(kind="notify", title=f"Record a VEX-style decision for {f['id']}", detail=json.dumps(dict(vulnerability=f["id"], product=spec["title"], status="not_affected", justification="vulnerable_code_not_in_execute_path",
+                                                                                                                        impact_statement="no call path found from entry points to the vulnerable function within the analyzed scope (static analysis)", analyzed_by="Blast Radius")),
+                                path_ids=[f["sibling_path_id"]], risk="static analysis only: review before publishing"))
+    for f in sorted(unknown, key=lambda x: -(x["cvss"] or 0))[:2]:
+        pass
+    top_unknown = sorted(unknown, key=lambda x: -(x["cvss"] or 0))[:1]
+    for f in top_unknown:
+        pids = [p for p in ([reach[0].get("path_id")] if reach else []) + [x.get("sibling_path_id") for x in nopath[:1]] if p]
+        if pids:
+            actions.append(dict(kind="review", title=f"Manually review {f['id']} ({f['package']} {f['version']}, {f['severity']})", detail="The advisory's fix commit does not point to a Python function we can locate (for example shell templates or data files), so reachability is UNKNOWN, not safe.", path_ids=pids, risk="unknown"))
+    ans = dict(summary=f"{spec['title']}: scanner view {len(F)} advisories ({hc} high/critical). Graph view: {len(reach)} reachable, {len(nopath)} no path found, {len(unknown)} unknown. "
+                       f"{len(upgrades)} upgrade(s) pass smoke checks and clear {sum(len(c['cleared_in_scope']) for c in cands if c['package'] in upgrades)} reachable finding(s).",
+               confidence=0.6, claims=claims, actions=actions,
+               extras=dict(app=app, title=spec["title"], scanner=dict(total=len(F), high_or_critical=hc), counts=dict(reachable=len(reach), no_path_found=len(nopath), unknown=len(unknown)),
+                           findings=[dict(id=f["id"], package=f["package"], version=f["version"], severity=f["severity"], cvss=f["cvss"], verdict=f["verdict"], fixed=f["fixed"][:2],
+                                          function=(f["functions"][0].split(".")[-1] if f["functions"] else None), mapping=f["mapping"], hops=f.get("hops"),
+                                          path_id=f.get("path_id") or f.get("sibling_path_id")) for f in sorted(F, key=lambda x: (["reachable", "no_path_found", "unknown"].index(x["verdict"]), -(x["cvss"] or 0)))],
+                           checks={k: dict(ok=bool(v.get("checks")) and all(c["ok"] for c in v["checks"]), install_ok=v.get("install_ok"), install_error=v.get("install_error"),
+                                           checks=[dict(title=c["title"], ok=c["ok"], tail=c["tail"][:160]) for c in v.get("checks", [])]) for k, v in checks.items()},
+                           precomputed_at=cr.data.get("precomputed_at") if cr else None))
+    return ans, [], []

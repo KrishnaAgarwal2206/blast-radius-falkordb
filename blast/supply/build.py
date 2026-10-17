@@ -19,8 +19,19 @@ def graph_name(app):
     return f"sc_{app}"
 
 
+def ensure_checkout(spec, log=print):
+    """Clone the demo app at its pinned tag if it is not already on disk (the yamlfull control ships in the repo)."""
+    import subprocess
+    root = Path(spec["repo"])
+    if not root.exists() and spec.get("git"):
+        log(f"cloning {spec['git']} @ {spec['tag']}")
+        root.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", spec["tag"], spec["git"], str(root)], check=True)
+
+
 def build(app: str, log=print, fresh=True):
     spec = APPS[app]
+    ensure_checkout(spec, log)
     t0 = time.perf_counter()
     g = graph_name(app)
     if fresh:

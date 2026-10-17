@@ -27,3 +27,7 @@
 - networkx only as fallback.
 
 ## D9. Deployment: FalkorDB Cloud free tier is 100MB, no persistence, deleted after 7 days -> ship a re-seed script and replay mode; docker compose for local.
+
+## D10. LLM budget: $25 total for dev + eval + demo video
+- Decision: agent default model `claude-haiku-4-5-20251001` (tool loop), per-run hard caps (max 6 tool turns, max_tokens 1500, tool results truncated to ~3k chars), prompt caching on system+tools, token/cost counter in every run_finished event and a persisted spend ledger that refuses runs once $15 is spent (reserve $10 for judges/video). All deterministic analysis (L3) runs with no LLM; tests never call the API; the demo video uses recorded replays of real runs.
+- Alternatives: Sonnet for every run (~5-10x cost). Why: investigation quality comes from the graph tools, not the model.

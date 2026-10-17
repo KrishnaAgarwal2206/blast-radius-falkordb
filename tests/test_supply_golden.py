@@ -126,3 +126,15 @@ def test_plan_outcome_is_recomputed_on_the_upgraded_graph():
     assert any(x["id"] == "CVE-2025-50181" for x in snap["after"]["reachable"])         # ...and the one that needs an app change is still listed
     ans = loop.investigate("sc_httpie", "triage", lambda e: None, use_llm=False, remember=False)
     assert any(c["text"].startswith("Plan outcome") for c in ans["claims"])
+
+
+@pytest.mark.skipif(not have("sc_httpie"), reason="not built")
+def test_blocked_upgrade_has_a_verified_fix_path_with_extra_upgrade_and_app_patch():
+    from blast.supply import pipeline as P
+    snap = P.load("httpie")
+    fx = snap["app_patches"]["urllib3"]
+    assert fx["passed"] and fx["extra_upgrades"].get("requests-toolbelt") and "httpie/ssl.py" in fx["files"] and "DEFAULT_CIPHERS" in fx["diff"]
+    assert snap["after_fixed"]["counts"]["reachable"] == 0
+    ans = loop.investigate("sc_httpie", "triage", lambda e: None, use_llm=False, remember=False)
+    assert any(c["text"].startswith("Verified fix path for urllib3") for c in ans["claims"])
+    assert any(a["title"].startswith("Proposed fix for the blocked urllib3") and a["verified"] for a in ans["actions"])

@@ -20,7 +20,7 @@
 * **the FullLoader app: REACHABLE**, `main -> load_settings -> FullConstructor.construct_python_object_new` (2 hops), and plans `PyYAML 5.3.1 -> 6.0` whose smoke check passes;
 * **pre-commit: NO PATH FOUND**, because the graph shows it passes only `SafeLoader`/`CSafeLoader` (via `functools.partial(yaml.load, Loader=...)`), whose class hierarchy never registers the vulnerable handlers. It still shows what it *did* reach in the same file, and does **not** claim "not exploitable".
 
-On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none safe: the other 22 are unknown, 5 of them with a possible path through dynamic dispatch), plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses** to recommend `urllib3 -> 2.x` because it breaks the app (`ImportError: DEFAULT_CIPHERS`), a result the graph predicts (a name HTTPie imports no longer exists in the upgraded graph) and the smoke check then confirms. After the passing upgrade the analysis is re-run on the upgraded graph: for HTTPie 3 reachable become 1 (the urllib3 one, which needs an app change); for cookiecutter 6 become 0.
+On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none safe: the other 22 are unknown, 5 of them with a possible path through dynamic dispatch). It plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses the stand-alone `urllib3 -> 2.x`**: the graph preflight shows a name HTTPie imports (`urllib3.util.ssl_.DEFAULT_CIPHERS`) no longer exists in the upgraded graph, and the smoke check confirms the ImportError. It then closes the loop: the same diff shows `requests-toolbelt` also breaks, so the plan adds `requests-toolbelt 1.0.0`, the LLM drafts a minimal patch to `httpie/ssl.py` (applied to a *copy*), and the smoke checks pass on that combination. Re-running the analysis on the fully upgraded graph leaves **0 reachable** (was 3).
 
 ## Results (real queries, real data)
 
@@ -100,7 +100,7 @@ open http://localhost:8000
 ```
 
 Local dev: `python -m venv .venv && pip install -r requirements-dev.txt`, `docker run -p 6379:6379 -p 3000:3000 falkordb/falkordb`,
-`python -m blast.supply.pipeline httpie` (also `precommit`, `cookiecutter`, `yamlfull`; add `--no-checks` to skip the venv checks and keep recorded ones), `uvicorn blast.api.main:app`, `make test`.
+`python -m blast.supply.pipeline httpie` (also `precommit`, `cookiecutter`, `yamlfull`; add `--no-checks` to skip the venv checks and keep recorded ones), then optionally `python -m blast.supply.appfix httpie` (uses the LLM, a few tenths of a cent, to draft and verify the app patch for a blocked upgrade), `uvicorn blast.api.main:app`, `make test`.
 
 CLI: `python -m blast.cli investigate triage --graph sc_httpie`. MCP: `{"mcpServers":{"blast-radius":{"command":"python","args":["-m","blast.mcp_server"]}}}`.
 Recorded runs (no DB or LLM needed): `/?replay=supply-httpie`.

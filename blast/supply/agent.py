@@ -66,7 +66,7 @@ def t_preflight(graph, args):
             r = _q(res, new_g, "UNWIND $pairs AS p OPTIONAL MATCH (f:File {module:p[0]}) OPTIONAL MATCH (g:File {module:p[0] + '.' + p[1]}) "
                                "RETURN p[0], p[1], count(DISTINCT f), sum(CASE WHEN p[1] IN f.names THEN 1 ELSE 0 END), count(DISTINCT g)", {"pairs": [list(x) for x in uniq]}, timeout=30000)
             gone = {(a, b) for a, b, nf, nn, ng in r.rows if (nf == 0 and ng == 0) or (nf > 0 and nn == 0 and ng == 0)}
-            missing = [dict(file=p_.split("/", 1)[1] if "/" in p_ else p_, module=m, name=n) for p_, m, n in pairs if (m, n) in gone]
+            missing = [dict(path=p_, file=p_.split("/", 1)[1] if "/" in p_ else p_, module=m, name=n) for p_, m, n in pairs if (m, n) in gone]
         out.append(dict(package=pkg, to_version=c["to_version"], graph=new_g, imports_checked=len(pairs), missing=missing[:8], n_missing=len(missing)))
     res.data["preflight"] = out
     return res
@@ -198,6 +198,22 @@ def pipeline(r, text):
                             detail=f"Security: bump {', '.join(f'{k} to {v}' for k, v in upgrades.items())}. Clears reachable advisories {', '.join(ids)}. Evidence: call path(s) from an application entry point to the advisory's vulnerable function (see linked graph paths). "
                                    f"Checked: app smoke checks pass on the proposed pins. Not checked: the full test suite. Out of scope: {len(nopath)} advisories with no path found and {len(unknown)} unknown.",
                             path_ids=[next(f for f in reach if f["id"] in ids)["path_id"]] if ids else [], risk="none"))
+    fixes = (P.load(app) or {}).get("app_patches", {})
+    af = (P.load(app) or {}).get("after_fixed")
+    for pkg, fx in fixes.items():
+        cand = next((c for c in cands if c["package"] == pkg), None)
+        if not cand or not fx.get("passed"):
+            continue
+        pids = cand.get("path_ids", [])[:3]
+        extra = ", ".join(f"{k} {v}" for k, v in fx["extra_upgrades"].items())
+        claims.append(dict(kind="critical", text=f"Verified fix path for {pkg} {cand['to_version']}: the graph preflight found names removed in the upgraded graph; "
+                                                 f"the plan adds {extra or 'no extra upgrade'}{' and ' if extra and fx['files'] else ''}{'a patch to ' + ', '.join(fx['files']) if fx['files'] else ''}; "
+                                                 f"smoke checks PASS on that combination ({len(fx['checks'])}/{len(fx['checks'])})."
+                                                 + (f" Re-analysis with everything applied: {af['counts']['reachable']} reachable advisories remain (was {len(reach)})." if af else ""),
+                           path_ids=pids, node_ids=[uid("Service", pkg)] + [uid("Vulnerability", x) for x in cand["cleared_in_scope"]]))
+        actions.append(dict(kind="mitigate", title=f"Proposed fix for the blocked {pkg} upgrade (LLM-authored patch + extra upgrade, verified by smoke checks only)",
+                            detail=(("Pin " + ", ".join(f"{k}=={v}" for k, v in fx["upgrades"].items()) + ". ") + ("Apply the patch below to " + ", ".join(fx["files"]) + ":\n" + fx["diff"] if fx["diff"] else "")),
+                            command=f"pip install {' '.join(f'{k}=={v}' for k, v in fx['upgrades'].items())}", path_ids=pids, risk="draft: review the patch; smoke checks are not the full test suite"))
     for f in sorted(nopath, key=lambda x: -(x["cvss"] or 0))[:2]:
         if f.get("sibling_path_id"):
             actions.append(dict(kind="notify", title=f"Draft VEX statement for {f['id']} (under_investigation, static evidence attached)",

@@ -65,7 +65,7 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
         va = verdicts(ag)
         after = dict(graph=ag, upgrades=full, counts=va.data["counts"], total=va.data["total"],
                      reachable=[dict(id=f["id"], package=f["package"], hops=f.get("hops"), target=f.get("target")) for f in va.data["findings"] if f["verdict"] == "reachable"])
-    snap = dict(after=after, app=app, title=APPS[app]["title"], graph=g, ts=int(time.time()), counts=v.data["counts"], total=v.data["total"],
+    snap = dict(app_patches=(prior or {}).get("app_patches", {}), after_fixed=(prior or {}).get("after_fixed"), after=after, app=app, title=APPS[app]["title"], graph=g, ts=int(time.time()), counts=v.data["counts"], total=v.data["total"],
                 findings=v.data["findings"], paths=v.paths, plan=cands, checks=checks, pins=pins,
                 scanner=dict(total=v.data["total"], high_or_critical=sum(1 for f in v.data["findings"] if f["severity"] in ("HIGH", "CRITICAL"))))
     (OUT / f"{app}.json").write_text(json.dumps(snap, default=str))

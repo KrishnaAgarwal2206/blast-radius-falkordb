@@ -8,7 +8,7 @@
 4. **Have we decided this before?** Verdicts persist in the graph and are recalled across apps.
 
 > Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs x FalkorDB). Track 01 *Agents That Act on Connected Data* (primary), Track 03 *Company Brain* (ownership of code on the path), Track 02 *Agent Memory* (decisions persist and are recalled across apps).
-> **Live demo:** _add URL after deploying, see [`docs/DEPLOY.md`](docs/DEPLOY.md)_ · **Demo video:** _add link_ · **Blog:** [`docs/BLOG.md`](docs/BLOG.md) · **Queries and algorithms used:** [`docs/queries.cypher`](docs/queries.cypher) · **Ground truth and method:** [`docs/eval/ground-truth.md`](docs/eval/ground-truth.md)
+> **Live demo:** https://blast-radius-yeki.onrender.com (free tier: the first request after idle takes about a minute to wake; deploy notes in [`docs/DEPLOY.md`](docs/DEPLOY.md)) · **Demo video:** _add link_ · **Blog:** [`docs/BLOG.md`](docs/BLOG.md) · **Queries and algorithms used:** [`docs/queries.cypher`](docs/queries.cypher) · **Ground truth and method:** [`docs/eval/ground-truth.md`](docs/eval/ground-truth.md)
 
 ![hero](docs/img/hero.png)
 ![answer](docs/img/answer.png)

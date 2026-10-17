@@ -31,3 +31,11 @@
 ## D10. LLM budget: $25 total for dev + eval + demo video
 - Decision: agent default model `claude-haiku-4-5-20251001` (tool loop), per-run hard caps (max 6 tool turns, max_tokens 1500, tool results truncated to ~3k chars), prompt caching on system+tools, token/cost counter in every run_finished event and a persisted spend ledger that refuses runs once $15 is spent (reserve $10 for judges/video). All deterministic analysis (L3) runs with no LLM; tests never call the API; the demo video uses recorded replays of real runs.
 - Alternatives: Sonnet for every run (~5-10x cost). Why: investigation quality comes from the graph tools, not the model.
+
+## D11. Function-level attribution via git blame at HEAD (not hunk line mapping)
+- Alternatives: map historical hunk line numbers onto current function ranges (drifts after later edits; judge round 3 found a missing true cause). Why: blame is line-accurate for surviving code; edges carry source='blame'.
+
+## D12. UI is a no-build static app (vanilla ES modules + vendored force-graph)
+- Alternatives: React/Vite. Why: zero build step, works offline, one Docker layer, faster to iterate under the deadline.
+
+## D13. Claims are verified server-side (path exists, and every sha/incident id in the text appears in the cited paths); incidents equal to a suspect's own fix commit are excluded from recall as circular.

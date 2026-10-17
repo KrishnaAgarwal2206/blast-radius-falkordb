@@ -47,7 +47,7 @@ flowchart LR
 
 | Layer | Folder | What it does |
 |---|---|---|
-| L1 Ingestion | `blast/ingest/` | `python -m blast.ingest.cli <url\|path>`: ast + git + pyproject → graph. Idempotent (`MERGE`), ~10 s for OpenTelemetry-Python |
+| L1 Ingestion | `blast/ingest/` | `python -m blast.ingest.cli <url\|path>`: ast + git + pyproject → graph. Idempotent (`MERGE`), ~5 s for OpenTelemetry-Python |
 | L2 Graph model | `blast/graph/` | schema, indexes, FalkorDB client wrapper that records every query's Cypher + latency |
 | L3 Analysis | `blast/analysis/` | deterministic, LLM-free functions; each returns structured data **+ evidence paths + the Cypher it ran** |
 | L4 Agent | `blast/agent/` | Anthropic tool-use loop; guarded read-only `run_cypher`; claims verified against real paths |
@@ -82,7 +82,7 @@ Requirements: Docker, an `ANTHROPIC_API_KEY` (only needed for the LLM-agent mode
 ```bash
 cp .env.example .env            # set ANTHROPIC_API_KEY (optional)
 docker compose up --build -d    # FalkorDB :6379 (Browser :3000), API+UI :8000
-docker compose run --rm ingest  # clones opentelemetry-python @ 2fa016b2 (pinned) and builds the 'otel' graph (~1 min incl. clone)
+docker compose run --rm ingest  # clones opentelemetry-python @ 2fa016b2 (pinned) and builds the 'otel' graph (~1 min incl. clone; ingest itself ~5 s)
 open http://localhost:8000
 ```
 

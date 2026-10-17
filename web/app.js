@@ -288,7 +288,7 @@ async function expand(n) {
 }
 
 // ---------------------------------------------------------------- lens, legend
-function setLens(l) { S.lens = l; document.querySelectorAll('#lens button').forEach((b) => b.classList.toggle('on', b.dataset.lens === l)); legend(); }
+function setLens(l) { S.lens = l; S.active = null; document.querySelectorAll('.claim').forEach((x) => x.setAttribute('aria-pressed', 'false')); document.querySelectorAll('#lens button').forEach((b) => b.classList.toggle('on', b.dataset.lens === l)); legend(); }
 document.querySelectorAll('#lens button').forEach((b) => (b.onclick = () => setLens(b.dataset.lens)));
 function legend() {
   const L = $('legend');

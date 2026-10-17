@@ -355,7 +355,7 @@ def explain_path(graph, a: str, b: str, max_hops: int = 6) -> Result:
 
 
 # ---------------------------------------------------------------- incidents memory
-def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude: str | None = None) -> Result:
+def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude=None) -> Result:
     t0 = time.perf_counter()
     res = Result("recall_incidents")
     track()
@@ -368,8 +368,8 @@ def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude: str | 
     if not files:
         res.data["similar"] = []
         return res
-    r = _q(res, graph, f"MATCH p=(i:Incident)-[:AFFECTED]->(f:File) WHERE f.path IN $k AND i.id <> $ex "
-                       f"RETURN i.id, i.title, i.ts, i.source, f.path, {PATH_PROJ}", {"k": files, "ex": exclude or ""})
+    r = _q(res, graph, f"MATCH p=(i:Incident)-[:AFFECTED]->(f:File) WHERE f.path IN $k AND NOT i.id IN $ex "
+                       f"RETURN i.id, i.title, i.ts, i.source, f.path, {PATH_PROJ}", {"k": files, "ex": ([exclude] if isinstance(exclude, str) else list(exclude or []))})
     agg = defaultdict(lambda: dict(shared=[], paths=[]))
     for iid, title, ts, src, fp, ns, rs in r.rows:
         a = agg[iid]

@@ -31,7 +31,7 @@ def dispatch(graph, name, args):
     if name == "who_to_page":
         return core.who_to_page(graph, args.get("nodes", []), args.get("suspect_shas"))
     if name == "recall_incidents":
-        return core.similar_incidents(graph, args.get("nodes", []))
+        return core.similar_incidents(graph, args.get("nodes", []), exclude=args.get("exclude"))
     if name == "critical_nodes":
         return core.critical_nodes(graph, args.get("scope", "Service"))
     if name == "explain_path":

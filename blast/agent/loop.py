@@ -233,7 +233,8 @@ def pipeline(r: Run, text: str):
     sus = sc.data.get("suspects", []) if sc else []
     shas = [x["sha"] for x in sus]
     wp, _ = r.call("who_to_page", {"nodes": ([svc] if svc else []) + seeds[:8], "suspect_shas": shas[:3]}, "t4")
-    rc, _ = r.call("recall_incidents", {"nodes": seeds}, "t5")
+    # an incident that IS the suspect fix commit is not independent evidence (circular), so exclude it from recall
+    rc, _ = r.call("recall_incidents", {"nodes": seeds, "exclude": [f"inc-{x[:7]}" for x in shas]}, "t5")
     cr, _ = r.call("critical_nodes", {"scope": "Service"}, "t6")
     claims = []
     imp = br.data.get("impacted", [])
@@ -312,6 +313,20 @@ def investigate(graph, text, emit, use_llm=True, remember=True):
         return None
 
 
+def _keep_top_cause(llm: dict, draft: dict) -> dict:
+    """The graph's top-ranked suspect stays the headline cause; an LLM reordering is demoted to 'Also suspect'."""
+    top = next((c for c in draft["claims"] if c["kind"] == "cause"), None)
+    if not top or not llm:
+        return llm
+    m = re.search(r"\b[0-9a-f]{8}\b", top["text"])
+    causes = [c for c in llm.get("claims", []) if c.get("kind") == "cause"]
+    if m and causes and m.group(0) in causes[0]["text"]:
+        return llm
+    rest = [c for c in llm["claims"] if c.get("kind") != "cause"]
+    demoted = [dict(c, text="LLM review also suspects: " + c["text"]) for c in causes]
+    return dict(llm, claims=[top] + demoted + rest)
+
+
 def _agent(r: Run, text: str, t0, remember):
     """LLM mode: the deterministic tools run first (streamed live); the model re-ranks, verifies with at most a few
     extra tool calls, and writes the final path-cited answer. Keeps latency and cost low."""
@@ -369,6 +384,7 @@ def _agent(r: Run, text: str, t0, remember):
     if not final_input:
         r.send("error", message="agent did not produce a final answer; using the deterministic answer", recoverable=True)
         final_input = draft
+    final_input = _keep_top_cause(final_input, draft)
     final = r.finalize(final_input)
     if remember and seeds:
         seeds = [s for s in seeds if s]

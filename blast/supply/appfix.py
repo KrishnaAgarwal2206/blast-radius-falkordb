@@ -44,7 +44,7 @@ def _llm_patch(path, source, error, pkg, ver):
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     msg = client.messages.create(
         model=config.AGENT_MODEL, max_tokens=3000,
-        system="You make the smallest possible compatibility fix to a Python source file. Output ONLY the complete updated file in one ```python block. Change nothing else.",
+        system="You make the smallest possible compatibility fix to a Python source file. Preserve behaviour: never replace a value with None or a placeholder; compute an equivalent value if a constant was removed. Keep every comment, quote character and blank line byte-identical. Output ONLY the complete updated file in one ```python block.",
         messages=[{"role": "user", "content": f"The app must keep working after upgrading {pkg} to {ver}. Static analysis says this file imports a name that no longer exists:\n{error}\n\nFile `{path}`:\n```python\n{source}\n```"}])
     m = re.search(r"```python\n(.*?)```", msg.content[0].text, re.S)
     return (m.group(1) if m else None), (msg.usage.input_tokens * 1.0 + msg.usage.output_tokens * 5.0) / 1e6
@@ -107,9 +107,14 @@ def run_app(app: str, log=print):
             verify.APPS[app] = spec
             shutil.rmtree(tmp, ignore_errors=True)
         passed = bool(res.get("checks")) and all(x["ok"] for x in res["checks"])
+        warnings = []
+        for ln in diff_txt.splitlines():
+            if ln.startswith("+") and not ln.startswith("+++") and re.search(r"=\s*None\b", ln):
+                warnings.append(f"patch assigns None: {ln[1:].strip()} (check that behaviour is preserved)")
+        noise = [ln for ln in diff_txt.splitlines() if ln.startswith("+") and not ln.startswith("+++") and "#" in ln and ln[1:].strip().startswith("#")]
         log(f"{pkg}: upgrades {ups} + app patch {'yes' if overlay else 'no'} -> checks {'PASS' if passed else 'FAIL'}")
         out[pkg] = dict(upgrades=ups, extra_upgrades={k: v for k, v in ups.items() if k not in c["upgrade_set"]}, files=list(overlay), diff=diff_txt, steps=steps,
-                        checks=res.get("checks", []), passed=passed, model=config.AGENT_MODEL if overlay else None, cost_usd=round(cost, 4))
+                        checks=res.get("checks", []), passed=passed, warnings=warnings, model=config.AGENT_MODEL if overlay else None, cost_usd=round(cost, 4))
     snap["app_patches"] = out
     good = {k: v for k, v in out.items() if v["passed"]}
     if good:

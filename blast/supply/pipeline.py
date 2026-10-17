@@ -31,9 +31,10 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
     cands = plan.data["candidates"]
     # the set of packages that must move together: a candidate plus the upgrades that unblocked it
     to_ver = {c["package"]: c["to_version"] for c in cands if c["to_version"]}
+    adds_of = {c["package"]: c.get("adds", {}) for c in cands}
     for c in cands:
         if c["to_version"]:
-            c["upgrade_set"] = {c["package"]: c["to_version"], **{k: to_ver[k] for k in c.get("unblocked_by", []) if k in to_ver}}
+            c["upgrade_set"] = {c["package"]: c["to_version"], **c.get("adds", {}), **{k: to_ver[k] for k in c.get("unblocked_by", []) if k in to_ver}, **{a: v for k in c.get("unblocked_by", []) for a, v in adds_of.get(k, {}).items()}}
             c["patched_graph"] = f"sc_{app}__up_{c['package']}"
             if rebuild or c["patched_graph"] not in {x for x in __import__("blast.graph.client", fromlist=["list_graphs"]).list_graphs()}:
                 log(f"building the upgraded graph {c['patched_graph']} for {c['upgrade_set']}")
@@ -50,7 +51,7 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
         # the combined plan = every candidate that passes alone (and the pair, to catch interactions)
         ok = {c["package"]: c["to_version"] for c in cands if c["to_version"] and checks.get(c["package"], {}).get("checks") and all(x["ok"] for x in checks[c["package"]]["checks"])}
         if len(ok) > 1:
-            checks["combined"] = verify.run_checks(app, pins, ok, "combined")
+            checks["combined"] = verify.run_checks(app, pins, {k: v for c in cands if c["package"] in ok for k, v in c["upgrade_set"].items()}, "combined")
     # What the plan achieves: rebuild the graph with every passing upgrade applied, re-ingest advisories for the NEW versions and re-run reachability.
     passing = {c["package"] for c in cands if c["to_version"] and checks.get(c["package"], {}).get("checks") and all(x["ok"] for x in checks[c["package"]]["checks"])}
     full = {}

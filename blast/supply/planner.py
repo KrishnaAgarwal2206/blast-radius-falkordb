@@ -54,6 +54,8 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
         if f["verdict"] in scope:
             by_pkg.setdefault(f["package"], []).append(f)
     cands, upgrades = {}, {}
+    used_by = {}
+    adds_by = {}
 
     def try_choose(pkg, fs):
         cur = _ver(pins[pkg])
@@ -71,6 +73,7 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
             if d in upgrades:
                 sp = requires_of(d, str(upgrades[d])).get(pkg, "")
             cons.append((d, sp))
+        used_by[pkg] = sorted(d for d, _sp in cons if d in upgrades)
         eff = {**pins, **{k: str(v) for k, v in upgrades.items()}}
         rejected = []
         for v, installable in pypi_versions(pkg):
@@ -83,7 +86,15 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
             if not installable:
                 rejected.append((str(v), f"no wheel installable for the check runner (python {RUNNER_TAG} or pure-python)"))
                 continue
-            miss = [f"{k}{sp}" for k, sp in requires_of(pkg, str(v)).items() if k in eff and sp and _ver(eff[k]) not in SpecifierSet(sp)]
+            reqs = requires_of(pkg, str(v))
+            adds = {}
+            for k, sp in reqs.items():            # a new version may need a package the lock does not have yet: add the newest installable one that satisfies it
+                if k not in eff:
+                    ok_v = [str(x) for x, inst in pypi_versions(k) if inst and (not sp or x in SpecifierSet(sp))]
+                    if ok_v:
+                        adds[k] = ok_v[-1]
+            adds_by[pkg] = adds
+            miss = [f"{k}{sp}" for k, sp in reqs.items() if k in eff and sp and _ver(eff[k]) not in SpecifierSet(sp)]
             if miss:
                 rejected.append((str(v), "its dependencies not met by current pins: " + ", ".join(miss)))
                 continue
@@ -109,7 +120,7 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
                               cleared_all=[f["id"] for f in findings if f["package"] == pkg and f["id"] not in remaining],
                               remaining=sorted(remaining), constraints_checked=ncons, skipped=rejected[:3],
                               findings=[f["id"] for f in fs], path_ids=[f["path_id"] for f in fs if f.get("path_id")],
-                              unblocked_by=[k for k in upgrades if k != pkg] if pkg in blocked_once else [])
+                              unblocked_by=used_by.get(pkg, []), adds=adds_by.get(pkg, {}))
             del pending[pkg]
             progress = True
         if not progress or not pending:

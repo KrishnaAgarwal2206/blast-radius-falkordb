@@ -213,7 +213,7 @@ def pipeline(r, text):
                            path_ids=pids, node_ids=[uid("Service", pkg)] + [uid("Vulnerability", x) for x in cand["cleared_in_scope"]]))
         actions.append(dict(kind="mitigate", title=f"Proposed fix for the blocked {pkg} upgrade (LLM-authored patch + extra upgrade, verified by smoke checks only)",
                             detail=(("Pin " + ", ".join(f"{k}=={v}" for k, v in fx["upgrades"].items()) + ". ") + ("Apply the patch below to " + ", ".join(fx["files"]) + ":\n" + fx["diff"] if fx["diff"] else "")),
-                            command=f"pip install {' '.join(f'{k}=={v}' for k, v in fx['upgrades'].items())}", path_ids=pids, risk="draft: review the patch; smoke checks are not the full test suite"))
+                            command=f"pip install {' '.join(f'{k}=={v}' for k, v in fx['upgrades'].items())}", path_ids=pids, risk="draft: review the patch" + ("; " + "; ".join(fx.get("warnings", [])) if fx.get("warnings") else "") + "; smoke checks are not the full test suite"))
     for f in sorted(nopath, key=lambda x: -(x["cvss"] or 0))[:2]:
         if f.get("sibling_path_id"):
             actions.append(dict(kind="notify", title=f"Draft VEX statement for {f['id']} (under_investigation, static evidence attached)",

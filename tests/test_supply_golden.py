@@ -138,3 +138,17 @@ def test_blocked_upgrade_has_a_verified_fix_path_with_extra_upgrade_and_app_patc
     ans = loop.investigate("sc_httpie", "triage", lambda e: None, use_llm=False, remember=False)
     assert any(c["text"].startswith("Verified fix path for urllib3") for c in ans["claims"])
     assert any(a["title"].startswith("Proposed fix for the blocked urllib3") and a["verified"] for a in ans["actions"])
+
+
+@pytest.mark.skipif(not have("sc_httpie"), reason="not built")
+def test_checked_combination_equals_the_recommended_combination_and_pip_check_ran():
+    from blast.supply import pipeline as P
+    for app in ("httpie", "cookiecutter"):
+        snap = P.load(app)
+        for c in snap["plan"]:
+            if c.get("to_version"):
+                ck = snap["checks"][c["package"]]
+                assert ck["checks"][0]["title"].startswith("pip check")                 # real resolver consistency check on the installed set
+                assert all(k in ck["installed"] and ck["installed"][k] == v for k, v in c["upgrade_set"].items())
+    fx = P.load("httpie")["app_patches"]["urllib3"]
+    assert fx["upgrades"].get("requests") == "2.32.4" and fx["checks"][0]["title"].startswith("pip check") and fx["passed"]

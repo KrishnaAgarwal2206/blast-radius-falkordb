@@ -60,6 +60,10 @@ def run_checks(app: str, pins: dict, upgrades: dict, label: str, log=print) -> d
         (tmp / "tpl" / "cookiecutter.json").write_text('{"name": "demo", "greeting": "hello"}')
         (tmp / "tpl" / "{{cookiecutter.name}}" / "README.md").write_text("{{ cookiecutter.greeting|upper }} from {{ cookiecutter.name|title }}\n")
         env = {"PYTHONPATH": spec["repo"], "PATH": str(py.parent), "SYSTEMROOT": "C:\\Windows", "HOME": str(tmp), "USERPROFILE": str(tmp)}
+        t1 = time.perf_counter()
+        pc = subprocess.run([str(py), "-m", "pip", "check"], capture_output=True, text=True, timeout=120)
+        out["checks"].append(dict(title="pip check: the installed set satisfies every package's declared requirements", ok=pc.returncode == 0,
+                                  ms=round((time.perf_counter() - t1) * 1000), tail=re.sub(r"[A-Za-z]:[\\/][^\s'\"]*", "<path>", ((pc.stdout + pc.stderr).strip().splitlines() or ["ok"])[0])[:200], exercises=[]))
         for title, argv, exercises in CHECKS[app]:
             argv = [a.replace("{tmp}", tmp.as_posix()) for a in argv]
             t1 = time.perf_counter()

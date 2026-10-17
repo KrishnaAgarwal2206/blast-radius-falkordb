@@ -24,6 +24,8 @@ On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none
 
 ## Results (real queries, real data)
 
+**Read the unknown column first:** 48 of the 59 alerts are *unknown* (28 have no usable Python fix diff, 12 only a possible path through dynamic dispatch, 8 are in code the analysis never reaches). The product reports that rather than guessing.
+
 <!--BENCH-->
 | App (pinned lock) | Scanner alerts | of which high/critical | Reachable | No path found | Unknown | Upgrades planned | Pass smoke checks | Reachable alerts cleared by passing upgrades |
 |---|---|---|---|---|---|---|---|---|

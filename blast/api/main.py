@@ -37,12 +37,15 @@ class InvestigateReq(BaseModel):
 
 @app.get("/api/health")
 def health():
+    """Always answers 200 so a host's health check passes; `db` says whether FalkorDB is reachable and why not."""
+    base = {"llm_configured": bool(config.ANTHROPIC_API_KEY), "spent_usd": loop.spent(), "spend_limit_usd": config.SPEND_LIMIT_USD,
+            "db_host": (config.FALKORDB_HOST or "")[:18] + "...", "db_port": config.FALKORDB_PORT, "db_user_set": bool(config.FALKORDB_USERNAME), "db_password_set": bool(config.FALKORDB_PASSWORD)}
     try:
-        graphs = list_graphs()
-        return {"ok": True, "graphs": graphs, "llm_configured": bool(config.ANTHROPIC_API_KEY),
-                "spent_usd": loop.spent(), "spend_limit_usd": config.SPEND_LIMIT_USD}
+        return {"ok": True, "db": True, "graphs": [g for g in list_graphs() if "__up_" not in g], **base}
     except Exception as e:
-        raise HTTPException(503, f"FalkorDB unreachable: {e}")
+        import logging
+        logging.getLogger("uvicorn.error").warning("FalkorDB unreachable: %s", e)
+        return {"ok": False, "db": False, "db_error": f"{type(e).__name__}: {str(e)[:200]}", "graphs": [], **base}
 
 
 @app.get("/api/repos")

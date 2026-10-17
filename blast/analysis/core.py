@@ -129,6 +129,7 @@ def blast_radius(graph, target: str, max_depth: int = 3) -> Result:
 
 
 # ---------------------------------------------------------------- stack trace
+NOISY_MSG = re.compile(r"(line length|reformat|formatting|\blint|ruff|black\b|isort|pre-commit|typo|typing|type hint|mypy|pyright|pylint|docs?:|documentation|changelog|bump|dependabot|renovate|\bci\b|workflow)", re.I)
 FRAME = re.compile(r'File "([^"]+)", line (\d+), in ([\w<>]+)')
 
 
@@ -200,24 +201,35 @@ def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: in
     if files:
         r = _q(res, graph, f"MATCH p=(c:Commit)-[m:MODIFIED]->(t:File) WHERE t.path IN $k AND c.ts >= $since "
                            f"RETURN c.sha, c.msg, c.ts, m.adds, m.dels, {PATH_PROJ}", {"k": files, "since": now - window_days * 86400})
-        rows += [(0.8, "file", x) for x in r.rows]
+        rows += [(0.9, "file", x) for x in r.rows]
         r = _q(res, graph, f"MATCH (o:File)-[:IMPORTS]->(d:File) WHERE o.path IN $k "
                            f"MATCH p=(c:Commit)-[m:MODIFIED]->(d) WHERE c.ts >= $since AND NOT d.path IN $k "
                            f"RETURN c.sha, c.msg, c.ts, m.adds, m.dels, {PATH_PROJ}", {"k": files, "since": now - window_days * 86400})
-        rows += [(0.4, "dependency", x) for x in r.rows]
+        rows += [(0.12, "dependency", x) for x in r.rows]
     if svcs:
         r = _q(res, graph, f"MATCH (s:Service)-[:CONTAINS]->(t:File) WHERE s.name IN $k "
                            f"MATCH p=(c:Commit)-[m:MODIFIED]->(t) WHERE c.ts >= $since "
                            f"RETURN c.sha, c.msg, c.ts, m.adds, m.dels, {PATH_PROJ}", {"k": svcs, "since": now - window_days * 86400})
-        rows += [(0.5, "service", x) for x in r.rows]
+        rows += [(0.35, "service", x) for x in r.rows]
     best = {}
     for w, rel, (sha, msg, ts, adds, dels, ns, rs) in rows:
         age = (now - ts) / 86400
         score = w * math.exp(-math.log(2) * age / 30) * (1 + math.log1p((adds or 0) + (dels or 0)))
+        if NOISY_MSG.search(msg or ""):
+            score *= 0.15   # formatting / lint / typing / docs churn is rarely the cause of an incident
         if sha not in best or score > best[sha]["score"]:
             best[sha] = dict(sha=sha, msg=msg, age_days=round(age, 1), score=round(score, 3), via=rel, ns=ns, rs=rs)
     out = []
-    for b in sorted(best.values(), key=lambda x: -x["score"])[:top]:
+    ranked = sorted(best.values(), key=lambda x: -x["score"])
+    quiet = [b for b in ranked if not NOISY_MSG.search(b["msg"] or "")]
+    if quiet:   # formatting/lint/typing churn only survives when nothing else touched the code
+        ranked = quiet
+    direct = [b for b in ranked if b["via"] in ("function", "file")]
+    if len(direct) >= 3:   # enough direct evidence: ignore commits that only touched a dependency
+        ranked = direct
+    for b in ranked[:top]:
+        b["reason"] = {"function": "edited this function's lines", "file": "edited the failing file", "dependency": "edited a file the failing code imports",
+                       "service": "edited another file in the same package"}[b["via"]]
         pid = res.add_path(b.pop("ns"), b.pop("rs"), pid=f"suspect{len(out) + 1}")
         out.append(dict(b, uid=uid("Commit", b["sha"]), path_id=pid))
     res.data["suspects"] = out
@@ -247,7 +259,7 @@ def who_to_page(graph, node_uids: list[str], suspect_shas: list[str] | None = No
             p = people[email]
             p["name"] = name
             p["score"] += w * (sc or 0)
-            p["reasons"].append(f"owns {short(uid(*ns[-1][:2]))} (inferred score {sc})")
+            p["reasons"].append(f"owns {short(uid(*ns[-1][:2]))} (inferred {sc})")
             p["paths"].append((ns, rs))
     if suspect_shas:
         r = _q(res, graph, f"MATCH p=(x:Person)-[:AUTHORED]->(c:Commit) WHERE c.sha IN $k AND coalesce(x.bot,false)=false "
@@ -293,8 +305,14 @@ def critical_nodes(graph, scope: str = "Service", top: int = 8) -> Result:
         b = dict(bt.rows)
         for o in out:
             o["betweenness"] = round(b.get(o["uid"].split(":", 1)[1], 0), 2)
-    for o in out:
+    for i, o in enumerate(out):
         res.nodes[o["uid"]] = dict(label=scope, key=o["uid"].split(":", 1)[1], name=o["uid"].split(":", 1)[1])
+        if scope == "Service" and i < 5:
+            r = _q(res, graph, f"MATCH p=(x:Service)-[:DEPENDS_ON]->(t:Service {{name:$n}}) RETURN {PATH_PROJ} LIMIT 1", {"n": o["uid"].split(":", 1)[1]})
+            if r.rows:
+                o["path_id"] = res.add_path(*r.rows[0], pid=f"critical{i + 1}")
+        if scope == "Service":
+            o["dependents"] = _q(res, graph, "MATCH (x:Service)-[:DEPENDS_ON]->(:Service {name:$n}) RETURN count(x)", {"n": o["uid"].split(":", 1)[1]}).rows[0][0]
     res.data["critical"] = out
     res.data["note"] = f"PageRank over {rel} (edges point dependent→dependency, so high rank = many things rely on it)"
     res.ms = (time.perf_counter() - t0) * 1000
@@ -351,7 +369,7 @@ def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude: str | 
     for iid, a in agg.items():
         tot = _q(res, graph, "MATCH (i:Incident {id:$i})-[:AFFECTED]->(f:File) RETURN count(f)", {"i": iid}).rows[0][0]
         jac = len(a["shared"]) / max(len(set(files)) + tot - len(a["shared"]), 1)
-        scored.append((jac + 0.01 * len(a["shared"]) + (0.1 if a.get("source") == "live" else 0), iid, a, jac))  # recorded investigations are exact analogs: small rank bonus
+        scored.append((jac + 0.01 * len(a["shared"]), iid, a, jac))
     out = []
     for _, iid, a, jac in sorted(scored, reverse=True)[:top]:
         c = _q(res, graph, f"MATCH p=(i:Incident {{id:$i}})-[:CAUSED_BY]->(c:Commit) RETURN c.sha, c.msg, {PATH_PROJ}", {"i": iid}).rows

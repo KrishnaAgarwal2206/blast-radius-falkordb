@@ -32,7 +32,7 @@ function rampPR(t) { const a = hex('#2A3A5C'), b = hex('#56B4E9'), c = hex('#FFF
 const DEPTH_COL = ['#FF5A4A', '#FFB000', '#F0E442', '#56B4E9'];
 const COMM = ['#56B4E9', '#E69F00', '#CC79A7', '#2FBF9A', '#F0E442', '#C4B5FD', '#FF5A4A', '#7C8CF8', '#A3B1C6', '#3DDC97'];
 function fillFor(n) {
-  if (S.lens === 'pagerank') return n.label === 'Service' && n.pagerank != null ? rampPR(Math.sqrt(n.pagerank / S.maxPR)) : '#3A4254';
+  if (S.lens === 'pagerank') return n.label === 'Service' && n.pagerank != null ? rampPR(Math.sqrt(n.pagerank / S.maxPR)) : rampPR(Math.min(1, Math.log1p(S.deg?.get(n.id) || 0) / 3) * 0.6);
   if (S.lens === 'depth') return S.depth.has(n.id) ? DEPTH_COL[Math.min(S.depth.get(n.id), 3)] : '#3A4254';
   if (S.lens === 'community') return n.community != null ? COMM[n.community % COMM.length] : '#3A4254';
   return PALETTE[n.label] || '#999';
@@ -57,7 +57,7 @@ const fg = ForceGraph()($('graph')).backgroundColor('rgba(0,0,0,0)').nodeId('id'
       if (p < 1 && !reduced) { ctx.beginPath(); ctx.arc(n.x, n.y, r * (1 + 1.4 * ease(p)), 0, 7); ctx.strokeStyle = `rgba(255,176,0,${0.8 * (1 - p)})`; ctx.lineWidth = 2 / k; ctx.stroke(); }
     }
     if (n.id === S.seed) { ctx.globalAlpha = 1; ctx.setLineDash([3 / k, 2 / k]); ctx.beginPath(); ctx.arc(n.x, n.y, r + 4, 0, 7); ctx.strokeStyle = '#FF6B4A'; ctx.lineWidth = 1.2 / k; ctx.stroke(); ctx.setLineDash([]); }
-    if ((L || k > 1.8 || r > 9 || n === S.hover) && !dim) {
+    if (((L && (k > 1.2 || ['Service', 'Commit', 'Person', 'Incident'].includes(n.label))) || k > 2.2 || r > 9 || n === S.hover) && !dim) {
       ctx.globalAlpha = 1; ctx.font = `${11 / k}px Inter, sans-serif`; ctx.fillStyle = '#E8ECF4'; ctx.textBaseline = 'middle';
       ctx.fillText(short(n), n.x + r + 3 / k, n.y); }
     ctx.globalAlpha = 1;
@@ -98,7 +98,7 @@ function addNodes(ns, near) {
   return added;
 }
 function addLinks(ls) { ls.forEach((l) => { if (S.nodes.has(l.source) && S.nodes.has(l.target) && !S.links.has(l.id)) S.links.set(l.id, { ...l }); }); }
-const sync = () => { fg.graphData({ nodes: [...S.nodes.values()], links: [...S.links.values()] }); $('tN').textContent = S.nodes.size; };
+const sync = () => { S.deg = new Map(); S.links.forEach((l) => { const a = idOf(l.source), b = idOf(l.target); S.deg.set(a, (S.deg.get(a) || 0) + 1); S.deg.set(b, (S.deg.get(b) || 0) + 1); }); fg.graphData({ nodes: [...S.nodes.values()], links: [...S.links.values()] }); $('tN').textContent = S.nodes.size; };
 const idOf = (x) => (typeof x === 'object' ? x.id : x);
 function fitTo(pred, pad = 90, maxK = 2.4, ms = 600) {
   const ns = [...S.nodes.values()].filter((n) => n.x != null && (!pred || pred(n)));
@@ -261,7 +261,7 @@ function selectClaim(c, btn) {
   btn.setAttribute('aria-pressed', 'true');
   const nodes = new Set(), links = new Set();
   c.path_ids.forEach((id) => { const p = S.paths[id]; if (!p) return; p.nodes.forEach((n) => nodes.add(n)); p.nodes.slice(1).forEach((n, i) => links.add(`${p.nodes[i]}|${p.rels[i]}|${n}`)); });
-  S.active = { nodes, links }; S.lit = new Map([...nodes].map((n) => [n, performance.now() - 1000])); S.litLinks = new Map([...links].map((l) => [l, performance.now() - 1000]));
+  c.node_ids?.forEach((id) => S.nodes.has(id) && nodes.add(id)); S.active = { nodes, links }; S.lit = new Map([...nodes].map((n) => [n, performance.now() - 1000])); S.litLinks = new Map([...links].map((l) => [l, performance.now() - 1000]));
   fitTo((n) => nodes.has(n.id), 110);
 }
 addEventListener('keydown', (e) => { if (e.key === 'Escape') { S.active = null; document.querySelectorAll('.claim').forEach((x) => x.setAttribute('aria-pressed', 'false')); }
@@ -317,7 +317,7 @@ $('mClose').onclick = () => ($('modal').hidden = true);
 // ---------------------------------------------------------------- memory timeline
 async function loadMemory() {
   try {
-    const inc = await (await fetch(`/api/incidents?graph=${S.graph}&limit=40`)).json();
+    const inc = await (await fetch(`/api/incidents?graph=${S.graph}&limit=200`)).json();
     $('memCount').textContent = `(${inc.length} incidents)`;
     $('memBody').innerHTML = inc.map((i) => `<div class="inc${S.recalled.has(i.id) ? ' recalled' : ''}" data-inc="${esc(i.id)}"><b>${esc((i.title || '').slice(0, 80))}</b><small>${esc(i.id)} · ${i.source} · ${new Date(i.ts * 1000).toISOString().slice(0, 10)}${i.cause ? ' · cause ' + esc(i.cause.slice(0, 8)) : ''}</small><br><button class="ghost" data-pull="${esc(i.id)}">Pull into graph</button></div>`).join('');
     $('memBody').querySelectorAll('[data-pull]').forEach((b) => (b.onclick = async () => {

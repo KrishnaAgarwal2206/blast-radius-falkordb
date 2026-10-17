@@ -16,7 +16,7 @@ services:
   ingest:           # one-shot: docker compose run --rm ingest
     build: .
     profiles: ["tools"]
-    command: ["python", "-m", "blast.ingest.cli", "https://github.com/open-telemetry/opentelemetry-python", "--graph", "otel"]
+    command: ["python", "-m", "blast.ingest.cli", "https://github.com/open-telemetry/opentelemetry-python", "--graph", "otel", "--ref", "2fa016b27d9b817aee88ea58be1bd0bc10fd2a40"]
     environment: [FALKORDB_HOST=falkordb]
     volumes: ["./data:/app/data"]
     depends_on: [falkordb]

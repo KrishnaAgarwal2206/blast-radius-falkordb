@@ -39,3 +39,25 @@ def test_scenario3_stacktrace():
 
 def test_critical_nodes_sane():
     assert core.critical_nodes(G, "Service").data["critical"][0]["uid"] == "Service:opentelemetry-api"
+
+
+def test_ranking_prefers_real_changes_over_formatting_churn():
+    f = "File:opentelemetry-api/src/opentelemetry/context/__init__.py"
+    sus = core.suspect_changes(G, [f], window_days=180).data["suspects"]
+    assert sus and not any("line length" in s["msg"].lower() or "ruff" in s["msg"].lower() for s in sus[:2])
+
+
+def test_natural_language_prompt_resolves_service():
+    from blast.agent import loop
+    ev = []
+    ans = loop.investigate(G, "Our gRPC exporter fails at startup on a bad timeout. Look at opentelemetry-exporter-otlp-proto-grpc, who do I page?",
+                           ev.append, use_llm=False, remember=False)
+    assert ans and any(c["kind"] == "cause" and c["text"].startswith("Most likely cause: f36c1288") for c in ans["claims"])
+
+
+def test_third_party_trace_surfaces_trace_error():
+    from blast.agent import loop
+    ev = []
+    out = loop.investigate(G, 'Traceback (most recent call last):\n  File "/usr/lib/python3/json/decoder.py", line 1, in x\nValueError',
+                           ev.append, use_llm=False, remember=False)
+    assert out is None and any("none map" in e.get("message", "") for e in ev if e["type"] == "error")

@@ -221,7 +221,7 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
     return stats
 
 
-def clone_if_url(repo: str, log=print) -> str:
+def clone_if_url(repo: str, ref: str | None = None, log=print) -> str:
     """`blast ingest <url|path>`: clone URLs into data/repos/<name> (full history, needed for blame)."""
     if not re.match(r"^(https?://|git@)", repo):
         return repo
@@ -233,6 +233,8 @@ def clone_if_url(repo: str, log=print) -> str:
         log(f"cloning {repo} ...")
         dest.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", "-q", repo, str(dest)], check=True)
+    if ref:
+        subprocess.run(["git", "-C", str(dest), "checkout", "-q", ref], check=True)
     return str(dest)
 
 
@@ -241,8 +243,9 @@ def main():
     ap.add_argument("repo", nargs="?", default=config.REPO_PATH, help="local path or git URL")
     ap.add_argument("--graph", default=config.DEFAULT_GRAPH)
     ap.add_argument("--months", type=int, default=12)
+    ap.add_argument("--ref", default=None, help="commit/tag to pin the clone to (reproducible demo)")
     a = ap.parse_args()
-    ingest(clone_if_url(a.repo), a.graph, a.months)
+    ingest(clone_if_url(a.repo, a.ref), a.graph, a.months)
 
 
 if __name__ == "__main__":

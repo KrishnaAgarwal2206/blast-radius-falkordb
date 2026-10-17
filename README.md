@@ -81,11 +81,11 @@ Requirements: Docker, an `ANTHROPIC_API_KEY` (only needed for the LLM-agent mode
 ```bash
 cp .env.example .env            # set ANTHROPIC_API_KEY (optional)
 docker compose up --build -d    # FalkorDB :6379 (Browser :3000), API+UI :8000
-docker compose run --rm ingest  # clones opentelemetry-python and builds the 'otel' graph (~1 min incl. clone)
+docker compose run --rm ingest  # clones opentelemetry-python @ 2fa016b2 (pinned) and builds the 'otel' graph (~1 min incl. clone)
 open http://localhost:8000
 ```
 
-Local dev: `python -m venv .venv && pip install -r requirements.txt`, `docker run -p 6379:6379 -p 3000:3000 falkordb/falkordb`,
+Local dev: `python -m venv .venv && pip install -r requirements-dev.txt`, `docker run -p 6379:6379 -p 3000:3000 falkordb/falkordb`,
 `python -m blast.ingest.cli data/repos/otel --graph otel`, `uvicorn blast.api.main:app`, `make test`.
 
 CLI: `python -m blast.cli investigate "opentelemetry-exporter-otlp-proto-grpc"` (add `--llm` for the agent).
@@ -104,7 +104,7 @@ The LLM loop uses Claude Haiku 4.5 with prompt caching, ≤9 turns, compact tool
 
 ## Tests
 
-`make test` → 29 pytest tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
+`make test` → 31 tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
 
 ## Limitations / next steps
 

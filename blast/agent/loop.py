@@ -1,5 +1,6 @@
 """L4 agent: Anthropic tool-use loop over L3 tools, streaming events; plus a deterministic pipeline
 (used for tests, offline mode, replay seeding, and when the spend limit is reached)."""
+import hashlib
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from . import tools
 
 # $ per million tokens (Haiku 4.5)
 PRICE = {"in": 1.0, "out": 5.0, "cache_read": 0.10, "cache_write": 1.25}
-MAX_TURNS = 9
+MAX_TURNS = 5
 
 SYSTEM = """You are Blast Radius, an incident-investigation agent. You reason ONLY through a FalkorDB graph of a codebase \
 (Services = in-repo packages, Files, Functions, Commits, Persons, past Incidents). Never state a fact you did not get from a tool.
@@ -147,6 +148,18 @@ def add_spend(usd):
 
 
 # ---------------------------------------------------------------- deterministic pipeline
+def _find_target(r: Run, text: str):
+    """Free text -> the first token that resolves to a Service/File/Function (handles natural-language prompts)."""
+    one = text.strip()
+    if "\n" not in one and len(one) < 200 and core.resolve_target(r.graph, one)[0]:
+        return one
+    toks = sorted({t.strip(".,:;()'\"`") for t in re.findall(r"[\w./\-]{4,}", text)}, key=lambda t: (-bool(re.search(r"[/.\-_]", t)), -len(t)))
+    for t in toks[:25]:
+        if core.resolve_target(r.graph, t)[0]:
+            return t
+    return None
+
+
 def pipeline(r: Run, text: str):
     """Same tools, fixed order, templated claims. Zero LLM cost."""
     is_trace = "Traceback" in text or 'File "' in text
@@ -157,8 +170,17 @@ def pipeline(r: Run, text: str):
             origin = tr.data["origin_file"]
             for fr in tr.data["frames"]:
                 frame_nodes += [x for x in (fr["function"], fr["file"]) if x]
-    target = origin.split(":", 1)[1] if origin else text.strip().splitlines()[0][:200]
-    br, _ = r.call("blast_radius", {"target": (tr.data["origin"].split(":", 1)[1] if origin and tr.data.get("origin", "").startswith("Function:") else target)}, "t2")
+        elif tr and tr.data.get("error"):
+            r.send("error", message=tr.data["error"], recoverable=False)
+            return None
+    if origin:
+        target = tr.data["origin"].split(":", 1)[1] if tr.data.get("origin", "").startswith("Function:") else origin.split(":", 1)[1]
+    else:
+        target = _find_target(r, text)
+    if not target:
+        r.send("error", message="Nothing in the graph matches that input. Name a service (e.g. opentelemetry-sdk), a file path, a function, or paste a Python traceback.", recoverable=False)
+        return None
+    br, _ = r.call("blast_radius", {"target": target}, "t2")
     if not br or "error" in br.data:
         r.send("error", message=(br.data.get("error") if br else "blast_radius failed"), recoverable=False)
         return None
@@ -172,29 +194,37 @@ def pipeline(r: Run, text: str):
     else:
         seeds = [root]
     sc, _ = r.call("suspect_changes", {"nodes": seeds}, "t3")
-    shas = [s["sha"] for s in (sc.data.get("suspects", []) if sc else [])]
+    sus = sc.data.get("suspects", []) if sc else []
+    shas = [x["sha"] for x in sus]
     wp, _ = r.call("who_to_page", {"nodes": ([svc] if svc else []) + seeds[:8], "suspect_shas": shas[:3]}, "t4")
     rc, _ = r.call("recall_incidents", {"nodes": seeds}, "t5")
-    r.call("critical_nodes", {"scope": "Service"}, "t6")
+    cr, _ = r.call("critical_nodes", {"scope": "Service"}, "t6")
     claims = []
     imp = br.data.get("impacted", [])
-    if imp:
-        c = br.data["counts"]
-        claims.append(dict(kind="impact", text=f"{root.split(':',1)[1].split('/')[-1]} failing affects {c['Service']} dependent services and {c['File']} files (closest: {', '.join(core.short(i['uid']) for i in imp[:3])}).",
-                           path_ids=[i["path_id"] for i in imp[:3]], node_ids=[i["uid"] for i in imp[:3]]))
-    if sc and sc.data["suspects"]:
-        s = sc.data["suspects"][0]
-        claims.append(dict(kind="cause", text=f"Most likely cause: {s['sha'][:8]} \"{s['msg'][:80]}\" ({s['age_days']}d before head, touches the {s['via']}).",
-                           path_ids=[s["path_id"]], node_ids=[s["uid"]]))
-    if wp:
-        for p in wp.data["page"][:2]:
-            claims.append(dict(kind="page", text=f"Page {p['name']}: {p['why'][:120]}.", path_ids=[p["path_id"]], node_ids=[p["uid"]]))
-    if rc and rc.data["similar"]:
-        s = rc.data["similar"][0]
-        claims.append(dict(kind="similar", text=f"Similar past incident {s['id']}: \"{s['title'][:70]}\" (shared files {len(s['shared_files'])}, similarity {s['similarity']}).",
-                           path_ids=[s["path_id"]], node_ids=[s["uid"]]))
+    cnt = br.data["counts"]
+    plural = lambda n, w: f"{n} {w}{'' if n == 1 else 's'}"
     tn = core.short(root) if not root.startswith("Service:") else root.split(":", 1)[1]
-    ans = dict(summary=f"{tn} → {br.data['counts']['Service']} services and {br.data['counts']['File']} files depend on it; {len(shas)} recent suspect commit(s) touch it; {len(rc.data['similar']) if rc else 0} similar past incident(s) recalled from graph memory.", confidence=0.6, claims=claims)
+    if imp:
+        claims.append(dict(kind="impact", text=f"If {tn} fails: {plural(cnt['Service'], 'dependent service')} and {plural(cnt['File'], 'file')} are in the blast radius (closest: {', '.join(core.short(i['uid']) for i in imp[:3])}). Evidence: {len(imp)} impacted nodes, 3 shown as paths.",
+                           path_ids=[i["path_id"] for i in imp[:3]], node_ids=[i["uid"] for i in imp]))
+    for i, x in enumerate(sus[:3]):
+        pre = "Most likely cause" if i == 0 else "Also suspect"
+        claims.append(dict(kind="cause", text=f"{pre}: {x['sha'][:8]} \"{x['msg'][:80]}\" - {x['reason']}, {x['age_days']} days before the newest commit (score {x['score']}).",
+                           path_ids=[x["path_id"]], node_ids=[x["uid"]]))
+    if wp:
+        for x in wp.data["page"][:2]:
+            claims.append(dict(kind="page", text=f"Page {x['name']}: {x['why'][:200]}{' (no commits in 90+ days, may be inactive)' if x['inactive'] else ''}.", path_ids=[x["path_id"]], node_ids=[x["uid"]]))
+    if rc and rc.data["similar"]:
+        x = rc.data["similar"][0]
+        who = "Your earlier investigation" if x["source"] == "live" else "Similar past incident"
+        claims.append(dict(kind="similar", text=f"{who} {x['id']}: \"{x['title'][:70]}\" (shares {len(x['shared_files'])} file(s), similarity {x['similarity']}).",
+                           path_ids=[x["path_id"]], node_ids=[x["uid"]]))
+    if cr and svc:
+        for rank, o in enumerate(cr.data["critical"][:3], 1):
+            if o["uid"] == svc and o.get("path_id"):
+                claims.append(dict(kind="critical", text=f"{svc.split(':', 1)[1]} is the #{rank} single point of failure in this repo by PageRank over DEPENDS_ON ({o['dependents']} services depend on it directly).",
+                                   path_ids=[o["path_id"]], node_ids=[svc]))
+    ans = dict(summary=f"{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
     return ans, seeds, shas
 
 
@@ -211,7 +241,7 @@ def record(r: Run, text: str, seeds, shas, answer):
     sim = [c["node_ids"][0].split(":", 1)[1] for c in answer["similar_incidents"] if c["node_ids"]]
     svcs = list(dict.fromkeys(f for f in (r.results.get("blast_radius").data.get("service"),) if f))
     res, _ = r.call("record_incident", dict(
-        title=_title(text), files=files[:12], services=[s.split(":", 1)[1] for s in svcs],
+        id="live-" + hashlib.sha1(text.strip().encode()).hexdigest()[:10], title=_title(text), files=files[:12], services=[s.split(":", 1)[1] for s in svcs],
         cause_sha=shas[0] if shas else None, similar_ids=sim), "rec")
     return res
 
@@ -242,14 +272,24 @@ def investigate(graph, text, emit, use_llm=True, remember=True):
 
 
 def _agent(r: Run, text: str, t0, remember):
+    """LLM mode: the deterministic tools run first (streamed live); the model re-ranks, verifies with at most a few
+    extra tool calls, and writes the final path-cited answer. Keeps latency and cost low."""
     import anthropic
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-    msgs = [{"role": "user", "content": text[:6000]}]
+    out = pipeline(r, text)
+    if out is None:
+        r.send("run_finished", answer=None, ms=round((time.perf_counter() - t0) * 1000), usage=r.tokens, cost_usd=0)
+        return None
+    draft, seeds, shas = out
+    brief = json.dumps({"draft_claims": [{k: c[k] for k in ("kind", "text", "path_ids")} for c in draft["claims"]],
+                        "paths": {pid: p["sentence"][:160] for pid, p in r.paths.items()}}, default=str)[:7000]
+    msgs = [{"role": "user", "content": f"User input:\n{text[:3000]}\n\nThe deterministic graph tools already ran. Results:\n{brief}\n\n"
+             "Review them: fix any claim that looks wrong or irrelevant (e.g. a formatting commit as the cause), optionally call 1-2 tools to verify, "
+             "then call final_answer with concise claims, each citing path_ids from the results above."}]
     sys_blocks = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     schemas = [dict(t) for t in tools.TOOL_SCHEMAS]
     schemas[-1]["cache_control"] = {"type": "ephemeral"}
     final_input = None
-    seeds, shas = [], []
     for turn in range(MAX_TURNS):
         if spent() + r.cost >= config.SPEND_LIMIT_USD:
             r.send("error", message="spend limit reached", recoverable=False)
@@ -285,12 +325,8 @@ def _agent(r: Run, text: str, t0, remember):
             break
     add_spend(r.cost)
     if not final_input:
-        r.send("error", message="agent did not produce a final answer; falling back to deterministic pipeline", recoverable=True)
-        out = pipeline(r, text)
-        if out is None:
-            r.send("run_finished", answer=None, ms=round((time.perf_counter() - t0) * 1000), usage=r.tokens, cost_usd=round(r.cost, 4))
-            return None
-        final_input, seeds, shas = out
+        r.send("error", message="agent did not produce a final answer; using the deterministic answer", recoverable=True)
+        final_input = draft
     final = r.finalize(final_input)
     if remember and seeds:
         seeds = [s for s in seeds if s]

@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(not _up(), reason="API with otel graph not runni
 
 
 def test_demo_scenario_end_to_end():
-    SHOTS.mkdir(exist_ok=True)
+    SHOTS.mkdir(parents=True, exist_ok=True)
     errors = []
     with playwright.sync_playwright() as p:
         b = p.chromium.launch()

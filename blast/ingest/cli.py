@@ -95,6 +95,7 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
     # ---- structure ----
     run(graph, "MERGE (:Repo {name:$n})", {"n": graph}, readonly=False)
     batched(graph, "UNWIND $rows AS r MERGE (s:Service {name:r.name}) SET s.dir=r.path", services)
+    run(graph, "MATCH (r:Repo {name:$n}) MATCH (s:Service) MERGE (r)-[:CONTAINS]->(s)", {"n": graph}, readonly=False)
     batched(graph, "UNWIND $rows AS r MATCH (s:Service {name:r.service}) MERGE (f:File {path:r.path}) "
                    "SET f.service=r.service, f.module=r.module, f.loc=r.loc MERGE (s)-[:CONTAINS]->(f)",
             [dict(path=f.path, service=f.service, module=f.module, loc=f.loc) for f in files.values()])

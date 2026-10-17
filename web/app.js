@@ -307,11 +307,12 @@ $('btnSchema').onclick = async () => {
   const nodes = Object.entries(s.labels).map(([id, n]) => ({ id, n })), links = s.patterns.map((p) => ({ source: p.a, target: p.b, type: p.type, n: p.n }));
   sg ||= ForceGraph()($('schemaGraph')).backgroundColor('#111622');
   sg.width($('schemaGraph').clientWidth).height(430).nodeId('id').nodeRelSize(1).linkCurvature((l) => (l.source === l.target || l.source.id === l.target.id ? 0.7 : 0.15))
-    .nodeCanvasObject((n, ctx, k) => { const r = 6 + 14 * Math.sqrt(n.n / mx); shape(ctx, n.id, n.x, n.y, r); ctx.fillStyle = PALETTE[n.id]; ctx.fill(); ctx.font = `${11 / k}px Inter`; ctx.fillStyle = '#E8ECF4'; ctx.textAlign = 'center'; ctx.fillText(`${n.id} ${n.n.toLocaleString()}`, n.x, n.y + r + 9 / k); })
+    .nodeCanvasObject((n, ctx, k) => { const r = 5 + 10 * Math.sqrt(n.n / mx); shape(ctx, n.id, n.x, n.y, r); ctx.fillStyle = PALETTE[n.id]; ctx.fill(); ctx.font = `${11 / k}px Inter`; ctx.fillStyle = '#E8ECF4'; ctx.textAlign = 'center'; ctx.fillText(`${n.id} ${n.n.toLocaleString()}`, n.x, n.y + r + 9 / k); })
     .linkWidth((l) => 0.6 + Math.log(l.n + 1) / 3).linkColor(() => '#56627f').linkDirectionalArrowLength(4).linkDirectionalArrowRelPos(1)
     .linkCanvasObjectMode(() => 'after').linkCanvasObject((l, ctx, k) => { if (l.source.x == null) return; ctx.font = `${8 / k}px JetBrains Mono`; ctx.fillStyle = '#FFB000'; ctx.textAlign = 'center'; ctx.fillText(`${l.type} ${l.n.toLocaleString()}`, (l.source.x + l.target.x) / 2, (l.source.y + l.target.y) / 2); })
     .graphData({ nodes, links });
-  setTimeout(() => sg.zoomToFit(300, 30), 900);
+  sg.d3Force('charge').strength(-450); sg.d3Force('link').distance(130); sg.d3ReheatSimulation();
+  setTimeout(() => sg.zoomToFit(300, 60), 1000);
 };
 $('mClose').onclick = () => ($('modal').hidden = true);
 

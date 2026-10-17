@@ -9,6 +9,7 @@
 and it shows **the exact graph path behind every claim**, live, while the agent runs. A claim with no path is dropped before you ever see it.
 
 > Built for **Graph Hacks: Context for AI Agents** (WeMakeDevs × FalkorDB).
+> **Live demo:** _add URL after deploying (see [`docs/DEPLOY.md`](docs/DEPLOY.md))_ · **Demo video:** _add link_ · **Blog:** [`docs/BLOG.md`](docs/BLOG.md) · **Queries & algorithms used:** [`docs/queries.cypher`](docs/queries.cypher)
 > Tracks: **01 Agents That Act on Connected Data** (primary) · **03 Company Brain** (who owns / who knows what) · **02 Agent Memory** (incidents persist in the graph across sessions).
 
 ![hero](docs/img/hero.png)
@@ -61,7 +62,7 @@ Nodes: `Repo, Service (in-repo package), File, Class, Function, Package (externa
 Edges: `CONTAINS, DEFINES, IMPORTS, CALLS{confidence}, DEPENDS_ON, OWNS{score,source}, AUTHORED, MODIFIED{adds,dels}, AFFECTED, CAUSED_BY{confidence}, RESOLVED_BY, SIMILAR_TO{score}`.
 Live schema: UI → **Schema**, or `GET /api/graph/otel/schema`. Details and rationale: [`docs/DECISIONS.md`](docs/DECISIONS.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-Honesty notes baked into the model: ownership is **inferred** from recency-weighted commits (OpenTelemetry's CODEOWNERS is a single catch-all team); `CALLS` edges are best-effort static resolution; incidents are **real** fix commits (`fix|revert|regression…`) with `CAUSED_BY` found by `git blame` on the removed lines (SZZ-lite). Nothing is fabricated.
+Honesty notes baked into the model: ownership is **inferred** from recency-weighted commits (OpenTelemetry's CODEOWNERS is a single catch-all team); `CALLS` edges are best-effort static resolution; function-level `MODIFIED` edges come from `git blame` at HEAD (which in-window commit wrote each function's current lines), file-level ones from `git log`; incidents are **real** fix commits (`fix|revert|regression…`) with `CAUSED_BY` found by `git blame` on the removed lines (SZZ-lite). Nothing is fabricated.
 
 ## How FalkorDB is used
 
@@ -104,8 +105,12 @@ The LLM loop uses Claude Haiku 4.5 with prompt caching, ≤9 turns, compact tool
 
 ## Tests
 
-`make test` → 38 tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
+`make test` → 39 tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
 
 ## Limitations / next steps
 
 Python only (tree-sitter would add languages); CALLS is static and best-effort; ownership is inferred, not authoritative; similarity is Jaccard over affected files (embedding rerank is a natural extension); FalkorDB Cloud free tier has no persistence, so the hosted demo ships a re-seed script and recorded replays.
+
+## AI-use disclosure
+
+Blast Radius was built with Claude Code (Claude Sonnet) as a pair-programmer, including research subagents and independent "judge" subagents used to evaluate the product (reports in `docs/eval/`). The product itself uses Claude Haiku 4.5 at run time only when the **LLM agent** toggle is on; the default pipeline is deterministic graph queries. All numbers shown in the UI come from live FalkorDB queries; the decision log is in `docs/DECISIONS.md`.

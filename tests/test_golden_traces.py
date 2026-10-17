@@ -48,3 +48,34 @@ def test_java_trace_is_rejected_not_guessed():
 def test_generic_words_do_not_resolve_a_target():
     ans, ev = _run("the thread pool is stuck and the exporter looks slow")
     assert ans is None
+
+
+ON_EMIT = '''Traceback (most recent call last):
+  File "/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/_logs/_internal/export/__init__.py", line 312, in on_emit
+    self._batch_processor.emit(log_record)
+RuntimeError: queue closed
+'''
+
+
+def test_function_level_blame_finds_the_commit_that_wrote_the_failing_lines():
+    ans, _ = _run(ON_EMIT)
+    cause = next(c["text"] for c in ans["claims"] if c["kind"] == "cause")
+    assert cause.startswith("Most likely cause: 1d9f40b5") and "git blame" in cause   # verified: git blame -L312,312 on the pinned checkout
+
+
+def test_llm_style_claims_with_unsupported_shas_are_dropped():
+    r = loop.Run(G, lambda e: None)
+    r.paths = {"p": dict(path_id="p", nodes=["Commit:aaaaaaaa11112222", "File:x.py"], rels=["MODIFIED"], sentence="s")}
+    r.nodes = {"Commit:aaaaaaaa11112222": {}}
+    out = r.finalize({"summary": "s", "confidence": 1, "claims": [
+        {"kind": "cause", "text": "cause is aaaaaaaa", "path_ids": ["p"]},
+        {"kind": "cause", "text": "cause is bbbbbbbb", "path_ids": ["p"]}]})
+    assert [c["text"] for c in out["claims"]] == ["cause is aaaaaaaa"] and out["dropped_unverified_claims"] == 1
+
+
+def test_natural_language_gets_did_you_mean_and_control_chars_are_safe():
+    ans, ev = _run("who owns the metric reader")
+    msgs = [e["message"] for e in ev if e["type"] == "error"]
+    assert ans is None and "Did you mean" in msgs[0]
+    ans, _ = _run("abc\x00def opentelemetry-sdk")
+    assert ans is not None

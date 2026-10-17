@@ -2,7 +2,7 @@
 import argparse
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -135,26 +135,38 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
     batched(graph, "UNWIND $rows AS r MERGE (c:Commit {sha:r.sha}) SET c.ts=r.ts, c.msg=r.msg, c.pr=r.pr "
                    "WITH c, r MATCH (p:Person {email:r.email}) MERGE (p)-[:AUTHORED]->(c)", crow)
     fmod, fnmod = [], []
+    for c in commits:
+        for f, d in c["files"].items():
+            if f in files:
+                fmod.append(dict(sha=c["sha"], file=f, adds=d["adds"], dels=d["dels"]))
+    batched(graph, "UNWIND $rows AS r MATCH (c:Commit {sha:r.sha}) MATCH (f:File {path:r.file}) "
+                   "MERGE (c)-[m:MODIFIED]->(f) SET m.adds=r.adds, m.dels=r.dels", fmod)
+    # Function-level attribution via `git blame` at HEAD: which in-window commit last wrote the lines of each function.
+    # (Line-accurate for surviving code; replaces hunk->function mapping, which drifts as files are edited later.)
+    known = {c["sha"] for c in commits}
     by_file_funcs = defaultdict(list)
     for fn in funcs.values():
         by_file_funcs[fn["file"]].append(fn)
-    for c in commits:
-        for f, d in c["files"].items():
-            if f not in files:
-                continue
-            fmod.append(dict(sha=c["sha"], file=f, adds=d["adds"], dels=d["dels"]))
-            hit = set()
-            for a, b in d["hunks"]:
-                for fn in by_file_funcs[f]:
-                    if fn["start"] <= b and fn["end"] >= a:
-                        hit.add(fn["qname"])
-            for q in list(hit)[:15]:
-                fnmod.append(dict(sha=c["sha"], qname=q))
-    batched(graph, "UNWIND $rows AS r MATCH (c:Commit {sha:r.sha}) MATCH (f:File {path:r.file}) "
-                   "MERGE (c)-[m:MODIFIED]->(f) SET m.adds=r.adds, m.dels=r.dels", fmod)
+
+    def blame_one(rel):
+        out = gitlog.git(root, "blame", "--line-porcelain", "-w", "HEAD", "--", rel)
+        owner = {}
+        for ln in out.splitlines():
+            m = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", ln)
+            if m:
+                owner[int(m.group(2))] = m.group(1)
+        return rel, owner
+
+    with ThreadPoolExecutor(8) as ex:
+        for rel, owner in ex.map(blame_one, list(by_file_funcs)):
+            for fn in by_file_funcs[rel]:
+                cnt = Counter(owner.get(i) for i in range(fn["start"], fn["end"] + 1))
+                for sha, n in cnt.most_common(8):
+                    if sha in known:
+                        fnmod.append(dict(sha=sha, qname=fn["qname"], lines=n))
     batched(graph, "UNWIND $rows AS r MATCH (c:Commit {sha:r.sha}) MATCH (f:Function {qname:r.qname}) "
-                   "MERGE (c)-[m:MODIFIED]->(f) SET m.approx=true", fnmod)
-    log(f"loaded {len(fmod)} file-level and {len(fnmod)} function-level MODIFIED edges ({time.perf_counter()-t0:.1f}s)")
+                   "MERGE (c)-[m:MODIFIED]->(f) SET m.adds=r.lines, m.dels=0, m.source='blame'", fnmod)
+    log(f"loaded {len(fmod)} file-level and {len(fnmod)} blame-accurate function-level MODIFIED edges ({time.perf_counter()-t0:.1f}s)")
 
     owns = gitlog.compute_ownership(commits, set(files), file_service)
     batched(graph, "UNWIND $rows AS r MATCH (p:Person {email:r.email}) MATCH (s:Service {name:r.key}) "

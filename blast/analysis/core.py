@@ -73,9 +73,10 @@ def resolve_target(graph, text: str, res: Result | None = None, strict: bool = F
         ("MATCH (n:Service) WHERE (n.name = $t OR n.name = ('opentelemetry-' + $t) OR n.dir = $t) RETURN n.name", "Service", {"t": text}),
         ("MATCH (n:File) WHERE (n.path = $t OR n.path ENDS WITH $t) RETURN n.path ORDER BY size(n.path) LIMIT 1", "File", {"t": text}),
         ("MATCH (n:Function) WHERE (n.qname = $t OR n.qname ENDS WITH ('.' + $t)) RETURN n.qname ORDER BY size(n.qname) LIMIT 1", "Function", {"t": text}),
+        ("MATCH (c:Class) WHERE (c.qname = $t OR c.qname ENDS WITH ('.' + $t)) RETURN c.file ORDER BY size(c.qname) LIMIT 1", "File", {"t": text}),
         ("MATCH (n:Service) WHERE n.name CONTAINS $t RETURN n.name ORDER BY size(n.name) LIMIT 1", "Service", {"t": text.lower()}),
         ("MATCH (n:File) WHERE n.path CONTAINS $t RETURN n.path ORDER BY size(n.path) LIMIT 1", "File", {"t": text}),
-    ][: 3 if strict else 5]:
+    ][: 4 if strict else 6]:
         r = _q(res, graph, q, params)
         if r.rows:
             return label, r.rows[0][0]
@@ -224,11 +225,12 @@ def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: in
         score = w * (0.2 if caller else 1.0) * math.exp(-math.log(2) * age / 30) * (1 + math.log1p((adds or 0) + (dels or 0)))
         if NOISY_MSG.search(msg or ""):
             score *= 0.15   # formatting / lint / typing / docs churn is rarely the cause of an incident
-        if sha not in best or score > best[sha]["score"]:
-            best[sha] = dict(sha=sha, msg=msg, age_days=round(age, 1), score=round(score, 3), via=("caller" if caller else rel), ns=ns, rs=rs)
+        tier = {"function": 0, "file": 1}.get("caller" if caller else rel, 2)
+        if sha not in best or (tier, -score) < (best[sha]["tier"], -best[sha]["score"]):
+            best[sha] = dict(tier=tier, sha=sha, msg=msg, age_days=round(age, 1), score=round(score, 3), via=("caller" if caller else rel), ns=ns, rs=rs)
     out = []
     # commits that touched the failing frame itself always outrank commits that only touched callers/dependencies
-    ranked = sorted(best.values(), key=lambda x: (0 if x["via"] in ("function", "file") else 1, -x["score"]))
+    ranked = sorted(best.values(), key=lambda x: ({"function": 0, "file": 1}.get(x["via"], 2), -x["score"]))
     quiet = [b for b in ranked if not NOISY_MSG.search(b["msg"] or "")]
     if quiet:   # formatting/lint/typing churn only survives when nothing else touched the code
         ranked = quiet
@@ -236,7 +238,8 @@ def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: in
     if len(direct) >= 3:   # enough direct evidence: ignore commits that only touched a dependency
         ranked = direct
     for b in ranked[:top]:
-        b["reason"] = {"function": "edited this function's lines", "file": "edited the failing file", "dependency": "edited a file the failing code imports",
+        b.pop("tier", None)
+        b["reason"] = {"function": "wrote lines of the failing function (git blame)", "file": "edited the failing file", "dependency": "edited a file the failing code imports",
                        "service": "edited another file in the same package", "caller": "edited a caller higher in the stack trace (not the failing frame)"}[b["via"]]
         pid = res.add_path(b.pop("ns"), b.pop("rs"), pid=f"suspect{len(out) + 1}")
         out.append(dict(b, uid=uid("Commit", b["sha"]), path_id=pid))
@@ -283,10 +286,9 @@ def who_to_page(graph, node_uids: list[str], suspect_shas: list[str] | None = No
     out = []
     for email, p in sorted(people.items(), key=lambda kv: -kv[1]["score"])[:4]:
         inactive = (now - last.get(email, 0)) / 86400 > 90
-        ns, rs = p["paths"][0]
-        pid = res.add_path(ns, rs, pid=f"page{len(out) + 1}")
+        pids = [res.add_path(ns, rs, pid=f"page{len(out) + 1}_{k + 1}") for k, (ns, rs) in enumerate(p["paths"][:3])]
         out.append(dict(email=email, name=p["name"], score=round(p["score"], 3), why="; ".join(p["reasons"][:3]),
-                        inactive=inactive, path_id=pid, uid=uid("Person", email)))
+                        inactive=inactive, path_id=pids[0], path_ids=pids, uid=uid("Person", email)))
     res.data["page"] = out
     res.ms = (time.perf_counter() - t0) * 1000
     return res

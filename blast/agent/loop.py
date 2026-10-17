@@ -28,6 +28,7 @@ Workflow (skip steps that don't apply):
 2. Call blast_radius on the origin (file or function) if you haven't, then suspect_changes on [origin + files of the failing service/impacted nodes], then who_to_page with the top suspect shas, then recall_incidents on the origin/affected files.
 3. Optionally critical_nodes or explain_path. Use run_cypher only if the other tools can't answer.
 4. Finish with final_answer. Each claim must cite path_ids that tools returned (e.g. impact1, suspect1, page1, similar1). Claims without valid path_ids are discarded. Be concise and concrete; mention commit sha prefixes, names, depths. State uncertainty honestly (ownership is inferred from commits; CALLS edges are best-effort).
+Incidents whose id starts with 'live-' are earlier investigations by this tool, NOT evidence that a problem recurred; never call something a recurrence or regression because of them. Only cite commit shas and incident ids that appear in the cited paths.
 Tool results are compact JSON. Node ids look like 'File:path', 'Function:qname', 'Service:name', 'Commit:sha'."""
 
 
@@ -94,6 +95,12 @@ class Run:
             if not pids:
                 dropped += 1
                 continue
+            # every commit sha / incident id named in the text must appear in the cited paths or nodes
+            evidence = " ".join(u for p in pids for u in self.paths[p]["nodes"]) + " " + " ".join(nids)
+            cited = re.findall(r"\b[0-9a-f]{7,40}\b", c["text"]) + re.findall(r"\b(?:inc|live)-[0-9a-f]+\b", c["text"])
+            if any(x not in evidence and not any(("Commit:" + x) in e or ("Incident:" + x) in e or e.endswith(":" + x) or (":" + x) in e for e in evidence.split()) for x in cited):
+                dropped += 1
+                continue
             claims.append(dict(kind=c.get("kind", "impact"), text=c["text"], path_ids=pids, node_ids=nids,
                                claim_id=f"c{len(claims) + 1}"))
         for c in (claims if emit else []):
@@ -148,24 +155,46 @@ def add_spend(usd):
 
 
 # ---------------------------------------------------------------- deterministic pipeline
+STOP = set("what which when where does with from that this have your their there about would could should into over under "
+           "looks look slow stuck fails failing failed error errors broken down help please need check who owns owner page "
+           "thread pool exporter service file function class module package metric metrics trace traces log logs".split())
+
+
 def _find_target(r: Run, text: str):
-    """Free text -> the first token that resolves to a Service/File/Function (handles natural-language prompts)."""
+    """Free text -> (target, did_you_mean). Exact names first; then identifier-like tokens; then word overlap with file paths."""
     one = text.strip()
     if "\n" not in one and len(one) < 200 and core.resolve_target(r.graph, one)[0]:
-        return one
-    toks = sorted({t.strip(".,:;()'\"`") for t in re.findall(r"[\w./\-]{4,}", text)}, key=lambda t: (-bool(re.search(r"[/.\-_]", t)), -len(t)))
+        return one, []
+    toks = sorted({t.strip(".,:;()'\"`?!") for t in re.findall(r"[\w./\-]{4,}", text)}, key=lambda t: (-bool(re.search(r"[/.\-_]", t)), -len(t)))
     for t in toks[:25]:
-        if not re.search(r"[/.\-_]", t) and len(t) < 14:
-            continue   # generic words (thread, exporter...) are not evidence of a target
-        if core.resolve_target(r.graph, t, strict=True)[0]:
-            return t
-    return None
+        generic = not re.search(r"[/.\-_]", t) and len(t) < 14 and not re.search(r"[a-z][A-Z]", t)
+        if not generic and core.resolve_target(r.graph, t, strict=True)[0]:
+            return t, []
+    # CamelCase class names (BatchSpanProcessor)
+    for t in toks[:25]:
+        if re.search(r"[a-z][A-Z]", t) and core.resolve_target(r.graph, t, strict=True)[0]:
+            return t, []
+    # natural language: overlap between the words and file paths (a real query over File nodes)
+    words = {w for w in re.findall(r"[a-z]{4,}", text.lower())} - {"traceback", "most", "recent", "call", "last"}
+    keyed = {w for w in words if w not in STOP} or words
+    rows = core.run(r.graph, "MATCH (f:File) RETURN f.path").rows
+    scored = []
+    for (path,) in rows:
+        seg = path.lower().replace("-", "_")
+        hit = [w for w in keyed if w in seg]
+        if hit:
+            scored.append((len(hit), -len(path), path))
+    scored.sort(reverse=True)
+    cands = [p for _, _, p in scored[:3]]
+    if scored and scored[0][0] >= 2 and (len(scored) == 1 or scored[0][0] > scored[1][0]):
+        return scored[0][2], cands
+    return None, cands
 
 
 def pipeline(r: Run, text: str):
     """Same tools, fixed order, templated claims. Zero LLM cost."""
     is_trace = "Traceback" in text or 'File "' in text
-    origin, frame_nodes, tr = None, [], None
+    origin, frame_nodes, tr, cands = None, [], None, []
     if re.search(r"^\s+at [\w.$<>]+\(.*\)|Caused by: |\.java:\d+|\.go:\d+|\.js:\d+:\d+", text, re.M) and not is_trace:
         r.send("error", message="This looks like a non-Python stack trace. Blast Radius currently ingests Python repos only; paste a Python traceback, or name a service/file/function.", recoverable=False)
         return None
@@ -181,9 +210,10 @@ def pipeline(r: Run, text: str):
     if origin:
         target = tr.data["origin"].split(":", 1)[1] if tr.data.get("origin", "").startswith("Function:") else origin.split(":", 1)[1]
     else:
-        target = _find_target(r, text)
+        target, cands = _find_target(r, text)
     if not target:
-        r.send("error", message="Nothing in the graph matches that input. Name a service (e.g. opentelemetry-sdk), a file path, a function, or paste a Python traceback.", recoverable=False)
+        hint = (" Did you mean: " + "; ".join(core.short('File:' + c) for c in cands) + "?") if cands else ""
+        r.send("error", message="Nothing in the graph matches that input. Name a service (e.g. opentelemetry-sdk), a file path, a function or class, or paste a Python traceback." + hint, recoverable=False)
         return None
     br, _ = r.call("blast_radius", {"target": target}, "t2")
     if not br or "error" in br.data:
@@ -219,7 +249,7 @@ def pipeline(r: Run, text: str):
                            path_ids=[x["path_id"]], node_ids=[x["uid"]]))
     if wp:
         for x in wp.data["page"][:2]:
-            claims.append(dict(kind="page", text=f"Page {x['name']}: {x['why'][:200]}{' (no commits in 90+ days, may be inactive)' if x['inactive'] else ''}.", path_ids=[x["path_id"]], node_ids=[x["uid"]]))
+            claims.append(dict(kind="page", text=f"Page {x['name']}: {x['why'][:200]}{' (no commits in 90+ days, may be inactive)' if x['inactive'] else ''}.", path_ids=x["path_ids"], node_ids=[x["uid"]]))
     if rc and rc.data["similar"]:
         sims = rc.data["similar"]
         hist = [x for x in sims if x["source"] != "live"][:1]
@@ -257,6 +287,7 @@ def record(r: Run, text: str, seeds, shas, answer):
 
 
 def investigate(graph, text, emit, use_llm=True, remember=True):
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", text or "")
     r = Run(graph, emit)
     t0 = time.perf_counter()
     r.send("run_started", input=text[:2000], mode="llm" if use_llm else "deterministic", graph=graph)

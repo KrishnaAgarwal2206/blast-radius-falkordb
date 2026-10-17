@@ -18,7 +18,12 @@ class World:
         self.by_path = files
         self.partials = {f"{fi.module}.{n}": (fi, fe, kw) for fi in files.values() for n, (fe, kw) in fi.partials.items()}
         self.dict_reg = {}
+        self.class_attr_classes = {}     # attribute name -> classes assigned to it in class bodies (instantiated via `obj.attr(...)`)
+        for fi in files.values():
+            for cq, attr, vexpr in fi.class_attrs:
+                pass
         self.instantiated = set()
+        self.inst_by_fn = {}
         self.unresolved = []     # (caller_qname, 'recv.method') where the receiver's type is unknown
         self.file_of = {fn["qname"]: files[fn["file"]] for fn in self.funcs.values() if fn["file"] in files}
         for q, c in self.classes.items():
@@ -27,6 +32,11 @@ class World:
                 r = self.resolve_in(fi, b) if fi else None
                 if r and r[0] == "class":
                     c["resolved"].append(r[1])
+        for fi in files.values():
+            for cq, attr, vexpr in fi.class_attrs:
+                r = self.resolve_in(fi, vexpr)
+                if r and r[0] == "class":
+                    self.class_attr_classes.setdefault(attr, set()).add(r[1])
 
     # ---- name lookup
     def lookup(self, q, depth=0):
@@ -150,12 +160,16 @@ class World:
                 r = self.resolve_in(fi, expr, caller)
                 if not r:
                     parts = expr.split(".")
+                    if parts[-1] in self.class_attr_classes:       # obj.some_class_attribute(...): instantiates the class stored in that attribute
+                        self.instantiated |= self.class_attr_classes[parts[-1]]
+                        self.inst_by_fn.setdefault(caller_q, set()).update(self.class_attr_classes[parts[-1]])
                     if len(parts) >= 2 and not parts[-1].startswith("__") and parts[-1] not in COMMON and (parts[0] not in fi.symbols or parts[0] in ("self", "cls")):
                         self.unresolved.append((caller_q, parts[-1]))
                     continue
                 kind, q = r
                 if kind == "class":                      # constructor call -> __init__
                     self.instantiated.add(q)
+                    self.inst_by_fn.setdefault(caller_q, set()).add(q)
                     init = self.find_method(q, "__init__")
                     if not init:
                         continue
@@ -233,6 +247,7 @@ class World:
                 if pname in used_cls:
                     for c in self.class_candidates(fi, aexpr, caller):
                         self.instantiated.add(c)
+                        self.inst_by_fn.setdefault(caller_q, set()).add(c)
                         tag = f"param-class:{f['name']}({pname}={c.split('.')[-1]})"
                         for m in used_cls[pname] | {"__init__"}:
                             t = self.find_method(c, m)
@@ -328,39 +343,69 @@ class World:
                                 out[(fn["qname"], h)] = f"registry-dict:{dq.split('.')[-1]}"
         return out
 
-    def maybe_calls(self, deps: dict):
+    def maybe_calls(self, deps: dict, entries=None, strict=None):
         """Calls whose receiver type is unknown (`adapter = self.get_adapter(url); adapter.send(...)`): link the call site to every
         method with that name defined in the caller's own package or one of its direct dependencies (class-hierarchy style
-        over-approximation, capped). Reported as MAYBE_CALLS, never as CALLS: a path through them is only a *possible* path."""
+        over-approximation, capped), restricted to classes that can have a live instance. With `entries`, liveness is computed as a
+        fixpoint from the entry points (a class is live only if code reachable from an entry point instantiates it), so dead
+        modules do not add possible paths. Reported as MAYBE_CALLS, never as CALLS."""
         by_name = {}
         for q, fn in self.funcs.items():
             if fn.get("cls"):
                 by_name.setdefault(fn["name"], []).append(q)
         svc = {q: self.file_of[q].service for q in self.funcs if q in self.file_of}
-        out = {}
-        live = set()                       # classes that can have a live instance: instantiated ones and all their ancestors
-        todo = list(self.instantiated)
-        while todo:
-            c = todo.pop()
-            if c not in live:
-                live.add(c)
-                todo += self.classes.get(c, {}).get("resolved", [])
         cls_of = lambda q: q.rsplit(".", 1)[0]
-        for caller, meth in self.unresolved:
-            allowed = {svc.get(caller)} | set(deps.get(svc.get(caller), ()))
-            cands = [c for c in by_name.get(meth, []) if svc.get(c) in allowed and c != caller and cls_of(c) in live]
-            if 0 < len(cands) <= 8:
-                for c in cands:
-                    out[(caller, c)] = f"maybe:{meth}"
-        # getattr(self, <computed name>)(...): visitor/dispatch tables by name. Any method of a live subclass may be the target.
-        for q, fn in self.funcs.items():
-            if fn.get("getattr_dyn") and fn.get("cls"):
-                cq = cls_of(q)
-                subs = {c for c in self.classes if c == cq or self._descends(c, cq)}
-                targets = [m for m, f2 in self.funcs.items() if f2.get("cls") and cls_of(m) in subs and cls_of(m) in live and m != q]
-                if 0 < len(targets) <= 400:
-                    for t in targets:
-                        out[(q, t)] = "maybe:getattr"
+
+        def closure(classes):
+            live, todo = set(), list(classes)
+            while todo:
+                c = todo.pop()
+                if c not in live:
+                    live.add(c)
+                    todo += self.classes.get(c, {}).get("resolved", [])
+            return live
+
+        def compute(live):
+            out = {}
+            for caller, meth in self.unresolved:
+                allowed = {svc.get(caller)} | set(deps.get(svc.get(caller), ()))
+                cands = [c for c in by_name.get(meth, []) if svc.get(c) in allowed and c != caller and cls_of(c) in live]
+                if 0 < len(cands) <= 8:
+                    for c in cands:
+                        out[(caller, c)] = f"maybe:{meth}"
+            for q, fn in self.funcs.items():          # getattr(self, <computed name>)(...): visitor dispatch by name
+                if fn.get("getattr_dyn") and fn.get("cls"):
+                    cq = cls_of(q)
+                    subs = {c for c in self.classes if c == cq or self._descends(c, cq)}
+                    targets = [m for m, f2 in self.funcs.items() if f2.get("cls") and cls_of(m) in subs and cls_of(m) in live and m != q]
+                    if 0 < len(targets) <= 400:
+                        for t in targets:
+                            out[(q, t)] = "maybe:getattr"
+            return out
+
+        if not entries:
+            return compute(closure(self.instantiated))
+
+        def reach(extra):
+            adj = {}
+            for (a, b2) in list(strict or {}) + list(extra):
+                adj.setdefault(a, []).append(b2)
+            seen, todo = set(entries), list(entries)
+            while todo:
+                for n in adj.get(todo.pop(), ()):
+                    if n not in seen:
+                        seen.add(n)
+                        todo.append(n)
+            return seen
+
+        out, live = {}, set()
+        for _ in range(5):
+            R = reach(out)
+            new_live = closure(set().union(*[self.inst_by_fn.get(f, set()) for f in R]) if R else set())
+            if new_live == live:
+                break
+            live = new_live
+            out = compute(live)
         return out
 
     def _descends(self, c, anc, seen=None):

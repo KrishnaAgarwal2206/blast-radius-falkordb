@@ -51,7 +51,21 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
         ok = {c["package"]: c["to_version"] for c in cands if c["to_version"] and checks.get(c["package"], {}).get("checks") and all(x["ok"] for x in checks[c["package"]]["checks"])}
         if len(ok) > 1:
             checks["combined"] = verify.run_checks(app, pins, ok, "combined")
-    snap = dict(app=app, title=APPS[app]["title"], graph=g, ts=int(time.time()), counts=v.data["counts"], total=v.data["total"],
+    # What the plan achieves: rebuild the graph with every passing upgrade applied, re-ingest advisories for the NEW versions and re-run reachability.
+    passing = {c["package"] for c in cands if c["to_version"] and checks.get(c["package"], {}).get("checks") and all(x["ok"] for x in checks[c["package"]]["checks"])}
+    full = {}
+    for c in cands:
+        if c["package"] in passing:
+            full.update(c["upgrade_set"])
+    after = None
+    if full:
+        ag = f"sc_{app}__up_all"
+        build(app, log=lambda *_: None, pins_override={**pins, **full}, graph=ag)
+        advisories.ingest_advisories(ag, {**pins, **full}, log=lambda *_: None)
+        va = verdicts(ag)
+        after = dict(graph=ag, upgrades=full, counts=va.data["counts"], total=va.data["total"],
+                     reachable=[dict(id=f["id"], package=f["package"], hops=f.get("hops"), target=f.get("target")) for f in va.data["findings"] if f["verdict"] == "reachable"])
+    snap = dict(after=after, app=app, title=APPS[app]["title"], graph=g, ts=int(time.time()), counts=v.data["counts"], total=v.data["total"],
                 findings=v.data["findings"], paths=v.paths, plan=cands, checks=checks, pins=pins,
                 scanner=dict(total=v.data["total"], high_or_critical=sum(1 for f in v.data["findings"] if f["severity"] in ("HIGH", "CRITICAL"))))
     (OUT / f"{app}.json").write_text(json.dumps(snap, default=str))

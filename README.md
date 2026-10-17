@@ -20,7 +20,7 @@
 * **the FullLoader app: REACHABLE**, `main -> load_settings -> FullConstructor.construct_python_object_new` (2 hops), and plans `PyYAML 5.3.1 -> 6.0` whose smoke check passes;
 * **pre-commit: NO PATH FOUND**, because the graph shows it passes only `SafeLoader`/`CSafeLoader` (via `functools.partial(yaml.load, Loader=...)`), whose class hierarchy never registers the vulnerable handlers. It still shows what it *did* reach in the same file, and does **not** claim "not exploitable".
 
-On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none safe: the other 22 are unknown, 5 of them with a possible path through dynamic dispatch), plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses** to recommend `urllib3 -> 2.x` because it breaks the app (`ImportError: DEFAULT_CIPHERS`), a result you only get by running the check.
+On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none safe: the other 22 are unknown, 5 of them with a possible path through dynamic dispatch), plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses** to recommend `urllib3 -> 2.x` because it breaks the app (`ImportError: DEFAULT_CIPHERS`), a result the graph predicts (a name HTTPie imports no longer exists in the upgraded graph) and the smoke check then confirms. After the passing upgrade the analysis is re-run on the upgraded graph: for HTTPie 3 reachable become 1 (the urllib3 one, which needs an app change); for cookiecutter 6 become 0.
 
 ## Results (real queries, real data)
 

@@ -32,7 +32,7 @@ For each app (a real OSS project at a real tag, with the dependency versions an 
 
 ## Known failure modes
 * **Reachable is function-level, not precondition-level.** cookiecutter's Jinja2 CVE-2025-27516 (`do_attr`) is reported reachable, but the advisory only affects `SandboxedEnvironment` and cookiecutter uses a plain `Environment`; the product does not read advisory preconditions.
-* **Dynamic dispatch beyond the modelled patterns** (getattr-by-name visitors such as Jinja2's compiler `visit_*`, plugin discovery, entry-point groups) is not followed; such cases surface as unknown, or occasionally as "no path found" (see `CVE-2024-56201`, `CodeGenerator.visit_FromImport`, not resolvable statically). **"No path found" is never "not exploitable".**
+* **Dynamic dispatch beyond the modelled patterns** (getattr-by-name visitors such as Jinja2's compiler `visit_*`, plugin discovery, entry-point groups) is not followed; such cases surface as unknown, or occasionally as "no path found" (`CVE-2024-56201`, `CodeGenerator.visit_FromImport`, dispatched by `getattr(self, 'visit_' + ...)`, is now "unknown, possible path" via a `maybe:getattr` edge to the live subclass's methods). **"No path found" is never "not exploitable".**
 * The vulnerable function is *inferred* from the fix commit; a fix may touch code that is not the vulnerable sink. About half of the advisories here (28 of 59) have no usable Python fix diff and are unknown.
 * Entry points are the declared console scripts and public entry functions; plugin or framework hooks are not discovered.
 * Reachability is not exploitability (configuration and attacker control are out of scope).

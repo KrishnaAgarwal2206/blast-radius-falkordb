@@ -73,16 +73,16 @@ def build(app: str, log=print, fresh=True, pins_override=None, graph=None):
     for k, v in disp.items():
         calls.setdefault(k, v)
     log(f"resolved {len(calls)} CALLS edges ({len(disp)} via type-flow / registries) over {len(world.funcs)} functions ({time.perf_counter() - t0:.1f}s)")
-    deps_by = {app: {n for n in spec["requires"] if n in pins}}
-    for n, m in metas.items():
-        deps_by[n] = {r for r in m["requires"] if r in pins}
-    maybe = {k: v for k, v in world.maybe_calls(deps_by).items() if k not in calls}
-    log(f"{len(maybe)} MAYBE_CALLS candidates from {len(world.unresolved)} unresolved dynamic call sites")
     # entry points: declared + route-like decorators in app code
     entry = set(q for q in spec["entries"] if q in world.funcs)
     for q, fn in world.funcs.items():
         if fn["file"].startswith(f"{app}/") and any(any(k in d for k in ROUTE_DECOS) for d in fn.get("decorators", [])):
             entry.add(q)
+    deps_by = {app: {n for n in spec["requires"] if n in pins}}
+    for n, m in metas.items():
+        deps_by[n] = {r for r in m["requires"] if r in pins}
+    maybe = {k: v for k, v in world.maybe_calls(deps_by, entries=entry, strict=calls).items() if k not in calls}
+    log(f"{len(maybe)} MAYBE_CALLS candidates from {len(world.unresolved)} unresolved dynamic call sites")
     # write
     batched(g, "UNWIND $rows AS r MERGE (s:Service {name:r.name}) SET s.version=r.version, s.kind=r.kind", services)
     def app_imports(f):

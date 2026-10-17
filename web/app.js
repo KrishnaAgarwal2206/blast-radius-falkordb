@@ -150,7 +150,7 @@ $('repo').onchange = async (e) => { S.es?.close(); S.graph = e.target.value; res
 // ---------------------------------------------------------------- run lifecycle
 function reset() {
   S.paths = {}; S.claims = []; S.active = null; S.lit.clear(); S.litLinks.clear(); S.depth.clear(); S.seed = null; S.running = false; S.recalled.clear();
-  S.q = { n: 0, ms: 0, list: [] }; S.pendingGroup = null; S.groups = {}; queue.length = 0;
+  S.q = { n: 0, ms: 0, list: [] }; S.lastError = null; S.pendingGroup = null; S.groups = {}; queue.length = 0;
   ['tQ', 'tMs'].forEach((i) => $(i).textContent = '0'); $('tP95').textContent = '–';
   $('tab-hood').innerHTML = '<div class="empty">Waiting for the first query…</div>'; $('tab-answer').innerHTML = '<div class="empty">Investigating…</div>'; $('feed').innerHTML = '';
   // drop everything that is not the base service map
@@ -201,7 +201,7 @@ function handle(e, k, skip) {
       const n = addNodes(e.nodes, near); addLinks(e.edges); sync(); return skip ? 0 : Math.min(600, n * 25 + 120); }
     case 'path': return animatePath(e, k, skip);
     case 'claim': S.claims.push(e); return 40;
-    case 'error': feed(`! ${e.message}`, 'e'); toast(e.message); return 100;
+    case 'error': S.lastError = e.message; feed(`! ${e.message}`, 'e'); toast(e.message); return 100;
     case 'draft_answer': finish({ answer: e.answer, ms: '…', cost_usd: '…' }); feed('Graph answer ready; LLM is reviewing it…', 't'); return 0;
     case 'run_finished': S.running = false; finish(e); return 0;
   }

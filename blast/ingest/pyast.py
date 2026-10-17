@@ -18,6 +18,7 @@ class FileInfo:
     callargs: list = field(default_factory=list)   # (caller_qname, call_expr, [(position|keyword, arg_expr)])
     dicts: dict = field(default_factory=dict)      # module-level NAME = {key: handler, ...}: name -> [handler exprs]
     partials: dict = field(default_factory=dict)   # NAME = functools.partial(F, k=v): name -> (F expr, [(key, expr)])
+    class_attrs: list = field(default_factory=list)   # (class qname, attribute, value expr): `code_generator_class = CodeGenerator`
     toplevel: list = field(default_factory=list)   # names defined/assigned/imported at module level (for upgrade preflight)
     stars: list = field(default_factory=list)      # `from X import *` bases
     aliases: dict = field(default_factory=dict)    # module-level NAME = <expr>: candidate dotted exprs (class-valued aliases)
@@ -90,6 +91,9 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
             if isinstance(n, ast.ClassDef):
                 q = f"{mod}.{prefix}{n.name}"
                 fi.classes.append((q, display or rel, [b for b in (_expr_name(x) for x in n.bases) if b]))
+                for st in n.body:
+                    if isinstance(st, ast.Assign) and len(st.targets) == 1 and isinstance(st.targets[0], ast.Name) and _expr_name(st.value):
+                        fi.class_attrs.append((q, st.targets[0].id, _expr_name(st.value)))
                 visit(n.body, f"{prefix}{n.name}.", n.name)
             elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 q = f"{mod}.{prefix}{n.name}"

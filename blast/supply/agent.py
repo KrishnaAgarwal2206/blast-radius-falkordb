@@ -157,8 +157,9 @@ def pipeline(r, text):
             if passed:
                 upgrades[c["package"]] = c["to_version"]
             pf = pre.get(c["package"])
-            pf_txt = (f" Graph preflight: {pf['imports_checked'] - pf['n_missing']}/{pf['imports_checked']} imported names exist in the upgraded graph"
-                      + (f"; MISSING {', '.join(m['module'] + '.' + m['name'] for m in pf['missing'][:3])} (imported by {pf['missing'][0]['file']})." if pf["n_missing"] else ".")) if pf and pf["imports_checked"] else ""
+            pf_txt = ((f" Graph preflight: {pf['imports_checked'] - pf['n_missing']}/{pf['imports_checked']} imported names exist in the upgraded graph"
+                       + (f"; MISSING {', '.join(m['module'] + '.' + m['name'] for m in pf['missing'][:3])} (imported by {pf['missing'][0]['file']})." if pf["n_missing"] else "."))
+                      if pf and pf["imports_checked"] else (f" Graph preflight not evaluated: no code imports names directly from {c['package']} (attribute access is not checked)." if pf else ""))
             vacuous = passed and not any(c["package"] in x.get("exercises", ()) for x in ck.get("checks", []))
             state = ("smoke checks PASS" + (" but they do not exercise this package" if vacuous else "")) if passed else (f"smoke checks FAIL ({_clean(failed[0]['tail'])[:90]})" if failed else "checks not run")
             claims.append(dict(kind="critical", text=f"Upgrade {c['package']} {c['from_version']} -> {c['to_version']} ({c['jump']}) clears {', '.join(c['cleared_in_scope'])} "
@@ -168,6 +169,14 @@ def pipeline(r, text):
             claims.append(dict(kind="critical", text=f"No installable upgrade for {c['package']} {c['from_version']} clears {', '.join(c['findings'])}: "
                                                      f"{c['blocked'][0][1] if c['blocked'] else 'blocked'}.",
                                path_ids=[f["path_id"] for f in reach if f["package"] == c["package"]][:3], node_ids=[uid("Service", c["package"])]))
+    snap_after = (P.load(app) or {}).get("after")
+    if snap_after:
+        rem = snap_after["reachable"]
+        base_paths = [f["path_id"] for f in reach if f["id"] in {x["id"] for x in rem} and f.get("path_id")] or [f["path_id"] for f in reach[:1]]
+        claims.append(dict(kind="critical", text=f"Plan outcome (analysis re-run on the upgraded graph with {', '.join(f'{k} {v}' for k, v in snap_after['upgrades'].items())}): "
+                                                 f"{snap_after['total']} advisories remain (was {len(F)}), {snap_after['counts']['reachable']} reachable (was {len(reach)})"
+                                                 + (f"; still reachable: {', '.join(x['id'] + ' (' + x['package'] + ')' for x in rem)}, which needs a change to the app or a different version." if rem else "."),
+                           path_ids=base_paths[:3], node_ids=[uid("Service", k) for k in snap_after["upgrades"]]))
     # ---- actions (drafts; nothing is executed)
     for c in cands:
         ck = checks.get(c["package"], {})
@@ -205,6 +214,10 @@ def pipeline(r, text):
                "not_reached": "the analyzed code never reaches the file that contains it (it may be used through a subprocess, streaming or plugin mechanism we cannot see)."}.get(f.get("reason"), "the advisory's fix commit does not point to a Python function we can locate (for example shell templates or data files).")
         actions.append(dict(kind="review", title=f"Manually review {f['id']} ({f['package']} {f['version']}, {f['severity']})", detail=f"Reachability is UNKNOWN, not safe: {why}",
                             path_ids=[p for p in [f.get("possible_path_id")] if p], node_ids=[uid("Vulnerability", f["id"])], risk="unknown"))
+    try:                      # the investigation itself writes its verdicts to the shared decision graph (Portfolio and later runs read them)
+        P.remember(app, dict(findings=F, paths=fr.paths, ts=int(__import__("time").time())))
+    except Exception:
+        pass
     m = re.search(r"CVE-\d{4}-\d+", text or "", re.I)
     focus = m.group(0).upper() if m else None
     if focus:
@@ -225,7 +238,7 @@ def pipeline(r, text):
                confidence=0.6, claims=claims, actions=actions,
                extras=dict(app=app, title=spec["title"], scanner=dict(total=len(F), high_or_critical=hc), counts=dict(reachable=len(reach), no_path_found=len(nopath), unknown=len(unknown)),
                            findings=[dict(id=f["id"], package=f["package"], version=f["version"], severity=f["severity"], cvss=f["cvss"], verdict=f["verdict"], reason=f.get("reason"), fixed=f["fixed"][:2],
-                                          function=(f["functions"][0].split(".")[-1] if f["functions"] else None), mapping=f["mapping"], hops=f.get("hops"),
+                                          function=((f.get("target") or (f["functions"][0] if f["functions"] else "")).split(".")[-1] or None), mapping=f["mapping"], hops=f.get("hops"),
                                           path_id=f.get("path_id") or f.get("possible_path_id") or f.get("sibling_path_id")) for f in sorted(F, key=lambda x: (["reachable", "no_path_found", "unknown"].index(x["verdict"]), -(x["cvss"] or 0)))],
                            checks={k: dict(ok=bool(v.get("checks")) and all(c["ok"] for c in v["checks"]), install_ok=v.get("install_ok"), install_error=_clean(v.get("install_error") or ""),
                                            checks=[dict(title=c["title"], ok=c["ok"], tail=_clean(c["tail"])[:160], exercises=c.get("exercises")) for c in v.get("checks", [])]) for k, v in checks.items()},

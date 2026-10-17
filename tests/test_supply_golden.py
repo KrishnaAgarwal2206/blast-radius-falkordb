@@ -115,3 +115,14 @@ def test_memory_claims_only_appear_when_the_earlier_verdict_differs():
         for c in ans["claims"]:
             if c["kind"] == "memory":
                 assert "was previously assessed" in c["text"] and c["text"].count("'reachable'") < 2
+
+
+@pytest.mark.skipif(not have("sc_httpie"), reason="not built")
+def test_plan_outcome_is_recomputed_on_the_upgraded_graph():
+    import json
+    from blast.supply import pipeline as P
+    snap = P.load("httpie")
+    assert snap["after"]["counts"]["reachable"] < snap["counts"]["reachable"]          # applying the passing upgrade removes reachable advisories
+    assert any(x["id"] == "CVE-2025-50181" for x in snap["after"]["reachable"])         # ...and the one that needs an app change is still listed
+    ans = loop.investigate("sc_httpie", "triage", lambda e: None, use_llm=False, remember=False)
+    assert any(c["text"].startswith("Plan outcome") for c in ans["claims"])

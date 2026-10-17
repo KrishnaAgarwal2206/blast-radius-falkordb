@@ -145,3 +145,28 @@ def test_cvss3_base_score():
     assert cvss3_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H") == 9.8
     assert cvss3_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N") == 6.1
     assert cvss3_score("garbage") is None
+
+
+def test_getattr_dispatch_links_to_methods_of_live_subclasses_only(tmp_path):
+    (tmp_path / "v.py").write_text('''
+class Visitor:
+    def visit(self, node):
+        return getattr(self, "visit_" + node)(node)
+
+class Gen(Visitor):
+    def visit_A(self, n):
+        return 1
+
+class Unused(Visitor):
+    def visit_B(self, n):
+        return 2
+
+def run():
+    return Gen().visit("A")
+''')
+    fi = pyast.parse_file(tmp_path, "v.py", "app", module="v", display="app/v.py")
+    w = World({fi.path: fi})
+    w.calls()
+    m = w.maybe_calls({"app": set()})
+    assert ("v.Visitor.visit", "v.Gen.visit_A") in m
+    assert ("v.Visitor.visit", "v.Unused.visit_B") not in m      # Unused is never instantiated

@@ -65,6 +65,9 @@ def verdicts(graph: str) -> Result:
         res.nodes.setdefault(vuid, dict(label="Vulnerability", key=vid, name=vid))
         if best:
             item["verdict"] = "reachable"
+            pairs = [[best[1][i][1], best[1][i + 1][1]] for i in range(len(best[1]) - 1)]
+            hw = _q(res, graph, "UNWIND $p AS x MATCH (a:Function {qname:x[0]})-[e:CALLS]->(b:Function {qname:x[1]}) RETURN DISTINCT e.how", {"p": pairs}).rows if pairs else []
+            item["via"] = sorted({h[0].split(":")[0] for h in hw if h[0]})
             item["path_id"] = res.add_path(best[1], best[2], pid=f"reach{len(out) + 1}")
             item["hops"] = best[0]
             item["target"] = best[3]

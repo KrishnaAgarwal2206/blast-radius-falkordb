@@ -29,6 +29,15 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
     v = verdicts(g)
     plan = planner.plan(g, v.data["findings"], pins)
     cands = plan.data["candidates"]
+    # the set of packages that must move together: a candidate plus the upgrades that unblocked it
+    to_ver = {c["package"]: c["to_version"] for c in cands if c["to_version"]}
+    for c in cands:
+        if c["to_version"]:
+            c["upgrade_set"] = {c["package"]: c["to_version"], **{k: to_ver[k] for k in c.get("unblocked_by", []) if k in to_ver}}
+            c["patched_graph"] = f"sc_{app}__up_{c['package']}"
+            if rebuild or c["patched_graph"] not in {x for x in __import__("blast.graph.client", fromlist=["list_graphs"]).list_graphs()}:
+                log(f"building the upgraded graph {c['patched_graph']} for {c['upgrade_set']}")
+                build(app, log=lambda *_: None, pins_override={**pins, **c["upgrade_set"]}, graph=c["patched_graph"])
     prior = load(app)
     checks = dict(prior["checks"]) if (prior and not run_checks) else {}   # --no-checks keeps the previously recorded results
     if run_checks:
@@ -37,7 +46,7 @@ def prepare(app: str, rebuild=True, run_checks=True, log=print) -> dict:
         for c in cands:
             if c["to_version"]:
                 log(f"checking {c['package']} {c['from_version']} -> {c['to_version']}")
-                checks[c["package"]] = verify.run_checks(app, pins, {c["package"]: c["to_version"]}, f"{c['package']}")
+                checks[c["package"]] = verify.run_checks(app, pins, c["upgrade_set"], f"{c['package']}")
         # the combined plan = every candidate that passes alone (and the pair, to catch interactions)
         ok = {c["package"]: c["to_version"] for c in cands if c["to_version"] and checks.get(c["package"], {}).get("checks") and all(x["ok"] for x in checks[c["package"]]["checks"])}
         if len(ok) > 1:

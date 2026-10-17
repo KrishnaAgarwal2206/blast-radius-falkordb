@@ -79,3 +79,39 @@ def test_planner_unblocks_a_package_after_its_dependent_is_upgraded(monkeypatch)
     got = {c["package"]: c["to_version"] for c in res.data["candidates"]}
     assert got == {"a": "1.5", "b": "2.0"}              # b is blocked by a<2 until a is upgraded to a version that allows b 2.x
     db().select_graph(g).delete()
+
+
+@pytest.mark.skipif(not have("sc_cookiecutter"), reason="sc_cookiecutter not built")
+def test_getattr_visitor_dispatch_is_unknown_not_no_path_and_unused_classes_are_not_linked():
+    f = _finding("sc_cookiecutter", "CVE-2024-56201")       # CodeGenerator.visit_FromImport, called through getattr(self, 'visit_' + ...)
+    assert f["verdict"] == "unknown" and f.get("reason") == "possible_via_dynamic_dispatch"
+    g = _finding("sc_cookiecutter", "CVE-2024-56326")       # SandboxedEnvironment: never instantiated by the app
+    assert g["verdict"] != "reachable" and not g.get("possible_path_id")
+
+
+@pytest.mark.skipif(not (have("sc_httpie") and have("sc_httpie__up_urllib3")), reason="upgraded graph not built")
+def test_graph_preflight_predicts_the_urllib3_break_before_any_test_runs():
+    from blast.supply import agent as sa
+    pre = {x["package"]: x for x in sa.t_preflight("sc_httpie", {}).data["preflight"]}
+    assert pre["urllib3"]["n_missing"] >= 1 and any(m["name"] == "DEFAULT_CIPHERS" for m in pre["urllib3"]["missing"])
+    assert pre["requests"]["n_missing"] == 0
+
+
+@pytest.mark.skipif(not have("sc_httpie"), reason="not built")
+def test_cve_input_focuses_the_answer_and_unknown_cve_is_rejected():
+    ans = loop.investigate("sc_httpie", "what about CVE-2023-32681?", lambda e: None, use_llm=False, remember=False)
+    assert ans["summary"].startswith("Focus CVE-2023-32681")
+    assert all("CVE-2023-32681" in c["text"] or "requests" in c["text"] for c in ans["claims"])
+    assert not any("urllib3" in c["text"] for c in ans["claims"])
+    ev = []
+    assert loop.investigate("sc_httpie", "CVE-1999-0001", ev.append, use_llm=False, remember=False) is None
+    assert any("not among" in e.get("message", "") for e in ev if e["type"] == "error")
+
+
+@pytest.mark.skipif(not (have("sc_yamlfull") and have("sc_memory")), reason="not built")
+def test_memory_claims_only_appear_when_the_earlier_verdict_differs():
+    for g in ("sc_yamlfull", "sc_httpie", "sc_cookiecutter"):
+        ans = loop.investigate(g, "triage", lambda e: None, use_llm=False, remember=False)
+        for c in ans["claims"]:
+            if c["kind"] == "memory":
+                assert "was previously assessed" in c["text"] and c["text"].count("'reachable'") < 2

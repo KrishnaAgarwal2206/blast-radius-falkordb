@@ -50,7 +50,7 @@ def repos():
     from ..supply.apps import APPS
     out = []
     for g in list_graphs():
-        if g == "sc_memory":
+        if g == "sc_memory" or "__up_" in g:
             continue
         try:
             n = run(g, "MATCH (n) RETURN count(n)").rows[0][0]
@@ -85,6 +85,8 @@ def supply_summary(app_name: str):
 
 
 def _require_graph(g):
+    if g == "sc_memory" or "__up_" in g:
+        raise HTTPException(400, f"'{g}' is an internal graph, not an investigable app")
     if g not in list_graphs():
         raise HTTPException(404, f"unknown graph '{g}'. Available: {list_graphs()}")
 

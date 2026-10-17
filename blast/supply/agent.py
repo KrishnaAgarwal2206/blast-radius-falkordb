@@ -42,6 +42,36 @@ def t_checks(graph, args):
     return res
 
 
+def t_preflight(graph, args):
+    """What-if diff in FalkorDB: for each planned upgrade, which names the code imports from the upgraded package no longer exist in the
+    upgraded graph? Queries the current graph and the pre-built upgraded graph live, so the Cypher shows in the UI."""
+    res = Result("sc_preflight")
+    snap = P.load(app_of(graph)) or {}
+    out = []
+    for c in snap.get("plan", []):
+        if not c.get("to_version") or not c.get("patched_graph"):
+            continue
+        pkg, new_g = c["package"], c["patched_graph"]
+        mods = {r[0] for r in _q(res, graph, "MATCH (f:File {service:$p}) RETURN f.module", {"p": pkg}).rows}
+        rows = _q(res, graph, "MATCH (f:File) WHERE f.service <> $p AND size(f.imports_from) > 0 RETURN f.path, f.imports_from", {"p": pkg}, timeout=30000).rows
+        pairs = []
+        for path, imps in rows:
+            for imp in imps:
+                m, _, n = imp.partition(":")
+                if m in mods:
+                    pairs.append((path, m, n))
+        missing = []
+        if pairs:
+            uniq = sorted({(m, n) for _p, m, n in pairs})
+            r = _q(res, new_g, "UNWIND $pairs AS p OPTIONAL MATCH (f:File {module:p[0]}) OPTIONAL MATCH (g:File {module:p[0] + '.' + p[1]}) "
+                               "RETURN p[0], p[1], count(DISTINCT f), sum(CASE WHEN p[1] IN f.names THEN 1 ELSE 0 END), count(DISTINCT g)", {"pairs": [list(x) for x in uniq]}, timeout=30000)
+            gone = {(a, b) for a, b, nf, nn, ng in r.rows if (nf == 0 and ng == 0) or (nf > 0 and nn == 0 and ng == 0)}
+            missing = [dict(file=p_.split("/", 1)[1] if "/" in p_ else p_, module=m, name=n) for p_, m, n in pairs if (m, n) in gone]
+        out.append(dict(package=pkg, to_version=c["to_version"], graph=new_g, imports_checked=len(pairs), missing=missing[:8], n_missing=len(missing)))
+    res.data["preflight"] = out
+    return res
+
+
 def t_recall(graph, args):
     res = Result("sc_recall")
     app = app_of(graph)
@@ -77,6 +107,8 @@ def pipeline(r, text):
     unknown = [f for f in F if f["verdict"] == "unknown"]
     pr, _ = r.call("sc_plan", {"findings": F}, "t2")
     cands = pr.data["candidates"] if pr else []
+    fr2, _ = r.call("sc_preflight", {}, "t2b")
+    pre = {x["package"]: x for x in (fr2.data["preflight"] if fr2 else [])}
     cr, _ = r.call("sc_checks", {}, "t3")
     checks = cr.data["checks"] if cr else {}
     mr, _ = r.call("sc_recall", {"vulns": [f["id"] for f in reach + nopath]}, "t4")
@@ -112,7 +144,7 @@ def pipeline(r, text):
                            path_ids=[f["possible_path_id"]], node_ids=[uid("Vulnerability", f["id"])]))
     for d in decisions[:2]:
         mine = next((f for f in F if f["id"] == d["vuln"]), None)
-        if mine and (mine.get("path_id") or mine.get("sibling_path_id")):
+        if mine and mine["verdict"] != d["verdict"] and (mine.get("path_id") or mine.get("sibling_path_id")):
             claims.append(dict(kind="memory", text=f"Memory: {d['vuln']} was previously assessed in {d['app']} ({d['package']} {d['version']}) as '{d['verdict']}'. "
                                                    f"Here it is '{mine['verdict']}': same advisory, different evidence.",
                                path_ids=[mine.get("path_id") or mine["sibling_path_id"]], node_ids=[uid("Vulnerability", d["vuln"])]))
@@ -124,9 +156,13 @@ def pipeline(r, text):
         if c.get("to_version"):
             if passed:
                 upgrades[c["package"]] = c["to_version"]
-            state = "smoke checks PASS" if passed else (f"smoke checks FAIL ({_clean(failed[0]['tail'])[:90]})" if failed else "checks not run")
+            pf = pre.get(c["package"])
+            pf_txt = (f" Graph preflight: {pf['imports_checked'] - pf['n_missing']}/{pf['imports_checked']} imported names exist in the upgraded graph"
+                      + (f"; MISSING {', '.join(m['module'] + '.' + m['name'] for m in pf['missing'][:3])} (imported by {pf['missing'][0]['file']})." if pf["n_missing"] else ".")) if pf and pf["imports_checked"] else ""
+            vacuous = passed and not any(c["package"] in x.get("exercises", ()) for x in ck.get("checks", []))
+            state = ("smoke checks PASS" + (" but they do not exercise this package" if vacuous else "")) if passed else (f"smoke checks FAIL ({_clean(failed[0]['tail'])[:90]})" if failed else "checks not run")
             claims.append(dict(kind="critical", text=f"Upgrade {c['package']} {c['from_version']} -> {c['to_version']} ({c['jump']}) clears {', '.join(c['cleared_in_scope'])} "
-                                                     f"(reachable). {c['constraints_checked']} dependent constraint(s) from the graph satisfied; {state}.",
+                                                     f"(reachable). {c['constraints_checked']} dependent constraint(s) from the graph satisfied{' (together with ' + ', '.join(c['unblocked_by']) + ')' if c.get('unblocked_by') else ''}; {state}.{pf_txt}",
                                path_ids=c["path_ids"][:3], node_ids=[uid("Service", c["package"])] + [uid("Vulnerability", x) for x in c["cleared_in_scope"]]))
         else:
             claims.append(dict(kind="critical", text=f"No installable upgrade for {c['package']} {c['from_version']} clears {', '.join(c['findings'])}: "
@@ -175,8 +211,15 @@ def pipeline(r, text):
         if not any(f["id"] == focus for f in F):
             r.send("error", message=f"{focus} is not among the {len(F)} advisories matching {spec['title']}'s pinned versions.", recoverable=False)
             return None
-        claims.sort(key=lambda c: 0 if focus in c["text"] else 1)
-        actions.sort(key=lambda a: 0 if focus in (a["title"] + a["detail"]) else 1)
+        ff = next(f for f in F if f["id"] == focus)
+        claims = [c for c in claims if focus in c["text"] or (c["kind"] == "critical" and c["text"].startswith(f"Upgrade {ff['package']} "))] or claims[:1]
+        actions = [a for a in actions if focus in (a["title"] + a["detail"] + a.get("command", "")) or ff["package"] in (a["title"] + a.get("command", ""))]
+        if not claims or focus not in " ".join(c["text"] for c in claims):
+            claims.insert(0, dict(kind="impact", text=f"{focus} ({ff['package']} {ff['version']}, {ff['severity']}) verdict: {ff['verdict'].replace('_', ' ')}"
+                                                      + (f" ({ff['reason'].replace('_', ' ')})" if ff.get("reason") else "") + f"; fixed in {', '.join(ff['fixed'][:2]) or 'n/a'}.",
+                                  path_ids=[p for p in [ff.get("path_id") or ff.get("possible_path_id") or ff.get("sibling_path_id")] if p], node_ids=[uid("Vulnerability", focus)]))
+            if not claims[0]["path_ids"]:
+                claims[0]["path_ids"] = [f["path_id"] for f in reach[:1]] or [f["sibling_path_id"] for f in nopath[:1]]
     ans = dict(summary=(f"Focus {focus}: " if focus else "") + f"{spec['title']}: scanner view {len(F)} advisories ({hc} high/critical). Graph view: {len(reach)} reachable, {len(nopath)} no path found, {len(unknown)} unknown. "
                        f"{len(upgrades)} upgrade(s) pass smoke checks and clear {sum(len(c['cleared_in_scope']) for c in cands if c['package'] in upgrades)} reachable finding(s).",
                confidence=0.6, claims=claims, actions=actions,
@@ -185,6 +228,6 @@ def pipeline(r, text):
                                           function=(f["functions"][0].split(".")[-1] if f["functions"] else None), mapping=f["mapping"], hops=f.get("hops"),
                                           path_id=f.get("path_id") or f.get("possible_path_id") or f.get("sibling_path_id")) for f in sorted(F, key=lambda x: (["reachable", "no_path_found", "unknown"].index(x["verdict"]), -(x["cvss"] or 0)))],
                            checks={k: dict(ok=bool(v.get("checks")) and all(c["ok"] for c in v["checks"]), install_ok=v.get("install_ok"), install_error=_clean(v.get("install_error") or ""),
-                                           checks=[dict(title=c["title"], ok=c["ok"], tail=_clean(c["tail"])[:160]) for c in v.get("checks", [])]) for k, v in checks.items()},
+                                           checks=[dict(title=c["title"], ok=c["ok"], tail=_clean(c["tail"])[:160], exercises=c.get("exercises")) for c in v.get("checks", [])]) for k, v in checks.items()},
                            precomputed_at=cr.data.get("precomputed_at") if cr else None))
     return ans, [], []

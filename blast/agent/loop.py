@@ -19,7 +19,8 @@ from . import tools
 STEP_TITLES = {
     "sc_findings": "Match advisories to pinned versions, then test reachability from entry points",
     "sc_plan": "Plan the smallest installable upgrades, checked against graph constraints",
-    "sc_checks": "Run the app's smoke checks on each proposed upgrade (throw-away venv)",
+    "sc_preflight": "Graph preflight: diff the code's imports against the upgraded graph (FalkorDB, before any test runs)",
+    "sc_checks": "Report the recorded smoke checks on each proposed upgrade (run earlier in throw-away venvs)",
     "sc_recall": "Recall earlier decisions about the same advisories in other apps",
     "trace_stacktrace": "Parse the stack trace and map each frame to a code node",
     "blast_radius": "Walk reverse dependencies from the failing node (blast radius)",
@@ -168,6 +169,8 @@ def _summary(name, res):
         return f"{d.get('total')} advisories: {c.get('reachable')} reachable, {c.get('no_path_found')} no path found, {c.get('unknown')} unknown"
     if name == "sc_plan":
         return "; ".join(f"{x['package']} {x['from_version']} -> {x.get('to_version') or 'BLOCKED'}" for x in d.get("candidates", [])) or "no reachable findings to fix"
+    if name == "sc_preflight":
+        return "; ".join(f"{x['package']} {x['to_version']}: {x['imports_checked'] - x['n_missing']}/{x['imports_checked']} imported names exist" + (f", {x['n_missing']} MISSING" if x['n_missing'] else "") for x in d.get("preflight", [])) or "no upgrades to preflight"
     if name == "sc_checks":
         ck = d.get("checks", {})
         return "; ".join(f"{k}: {'PASS' if v.get('checks') and all(c['ok'] for c in v['checks']) else 'FAIL' if v.get('checks') else 'not installable'}" for k, v in ck.items()) or "no checks recorded"

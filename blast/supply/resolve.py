@@ -18,6 +18,7 @@ class World:
         self.by_path = files
         self.partials = {f"{fi.module}.{n}": (fi, fe, kw) for fi in files.values() for n, (fe, kw) in fi.partials.items()}
         self.dict_reg = {}
+        self.instantiated = set()
         self.unresolved = []     # (caller_qname, 'recv.method') where the receiver's type is unknown
         self.file_of = {fn["qname"]: files[fn["file"]] for fn in self.funcs.values() if fn["file"] in files}
         for q, c in self.classes.items():
@@ -154,6 +155,7 @@ class World:
                     continue
                 kind, q = r
                 if kind == "class":                      # constructor call -> __init__
+                    self.instantiated.add(q)
                     init = self.find_method(q, "__init__")
                     if not init:
                         continue
@@ -230,6 +232,7 @@ class World:
                 pname = key if isinstance(key, str) else (params[key + off] if key + off < len(params) else None)
                 if pname in used_cls:
                     for c in self.class_candidates(fi, aexpr, caller):
+                        self.instantiated.add(c)
                         tag = f"param-class:{f['name']}({pname}={c.split('.')[-1]})"
                         for m in used_cls[pname] | {"__init__"}:
                             t = self.find_method(c, m)
@@ -335,10 +338,34 @@ class World:
                 by_name.setdefault(fn["name"], []).append(q)
         svc = {q: self.file_of[q].service for q in self.funcs if q in self.file_of}
         out = {}
+        live = set()                       # classes that can have a live instance: instantiated ones and all their ancestors
+        todo = list(self.instantiated)
+        while todo:
+            c = todo.pop()
+            if c not in live:
+                live.add(c)
+                todo += self.classes.get(c, {}).get("resolved", [])
+        cls_of = lambda q: q.rsplit(".", 1)[0]
         for caller, meth in self.unresolved:
             allowed = {svc.get(caller)} | set(deps.get(svc.get(caller), ()))
-            cands = [c for c in by_name.get(meth, []) if svc.get(c) in allowed and c != caller]
+            cands = [c for c in by_name.get(meth, []) if svc.get(c) in allowed and c != caller and cls_of(c) in live]
             if 0 < len(cands) <= 8:
                 for c in cands:
                     out[(caller, c)] = f"maybe:{meth}"
+        # getattr(self, <computed name>)(...): visitor/dispatch tables by name. Any method of a live subclass may be the target.
+        for q, fn in self.funcs.items():
+            if fn.get("getattr_dyn") and fn.get("cls"):
+                cq = cls_of(q)
+                subs = {c for c in self.classes if c == cq or self._descends(c, cq)}
+                targets = [m for m, f2 in self.funcs.items() if f2.get("cls") and cls_of(m) in subs and cls_of(m) in live and m != q]
+                if 0 < len(targets) <= 400:
+                    for t in targets:
+                        out[(q, t)] = "maybe:getattr"
         return out
+
+    def _descends(self, c, anc, seen=None):
+        seen = seen or set()
+        if c in seen:
+            return False
+        seen.add(c)
+        return any(b == anc or self._descends(b, anc, seen) for b in self.classes.get(c, {}).get("resolved", []))

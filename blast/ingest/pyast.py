@@ -18,6 +18,7 @@ class FileInfo:
     callargs: list = field(default_factory=list)   # (caller_qname, call_expr, [(position|keyword, arg_expr)])
     dicts: dict = field(default_factory=dict)      # module-level NAME = {key: handler, ...}: name -> [handler exprs]
     partials: dict = field(default_factory=dict)   # NAME = functools.partial(F, k=v): name -> (F expr, [(key, expr)])
+    toplevel: list = field(default_factory=list)   # names defined/assigned/imported at module level (for upgrade preflight)
     stars: list = field(default_factory=list)      # `from X import *` bases
     aliases: dict = field(default_factory=dict)    # module-level NAME = <expr>: candidate dotted exprs (class-valued aliases)
 
@@ -104,6 +105,7 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
                                 t = _call_name(it.context_expr)
                                 if t:
                                     vartypes[it.optional_vars.id] = t
+                gdyn = any(isinstance(c, ast.Call) and _expr_name(c.func) == "getattr" and len(c.args) >= 2 and not isinstance(c.args[1], ast.Constant) for c in ast.walk(n))
                 rettype = None
                 for c in ast.walk(n):
                     if isinstance(c, ast.Return) and c.value is not None:
@@ -115,7 +117,7 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
                             break
                 decos = [d for d in (_expr_name(x.func if isinstance(x, ast.Call) else x) for x in n.decorator_list) if d]
                 fi.funcs.append(dict(qname=q, name=n.name, start=n.lineno, end=getattr(n, "end_lineno", n.lineno), cls=cls, file=display or rel,
-                                     decorators=decos, vartypes=vartypes, rettype=rettype, names=sorted({c.id for c in ast.walk(n) if isinstance(c, ast.Name) and isinstance(c.ctx, ast.Load)}), params=[a.arg for a in n.args.args + n.args.kwonlyargs]))
+                                     decorators=decos, vartypes=vartypes, rettype=rettype, getattr_dyn=gdyn, names=sorted({c.id for c in ast.walk(n) if isinstance(c, ast.Name) and isinstance(c.ctx, ast.Load)}), params=[a.arg for a in n.args.args + n.args.kwonlyargs]))
                 for c in ast.walk(n):
                     if isinstance(c, ast.Call):
                         cn = _call_name(c)
@@ -128,6 +130,17 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
                 visit(n.body, f"{prefix}{n.name}.", cls)
 
     visit(tree.body, "", None)
+    top = set()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            top.add(n.name)
+        elif isinstance(n, ast.Assign):
+            top.update(t.id for t in n.targets if isinstance(t, ast.Name))
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name):
+            top.add(n.target.id)
+    top.update(v[1] for v in fi.symbols.values() if v[1])
+    top.update(fi.symbols.keys())
+    fi.toplevel = sorted(top)
     for n in tree.body:   # module-level registrations such as  Cls.add_constructor(tag, Cls.handler)
         if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call):
             cn = _call_name(n.value)

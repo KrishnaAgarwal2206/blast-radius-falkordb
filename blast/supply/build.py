@@ -29,11 +29,11 @@ def ensure_checkout(spec, log=print):
         subprocess.run(["git", "clone", "-q", "--depth", "1", "--branch", spec["tag"], spec["git"], str(root)], check=True)
 
 
-def build(app: str, log=print, fresh=True):
+def build(app: str, log=print, fresh=True, pins_override=None, graph=None):
     spec = APPS[app]
     ensure_checkout(spec, log)
     t0 = time.perf_counter()
-    g = graph_name(app)
+    g = graph or graph_name(app)
     if fresh:
         try:
             db().select_graph(g).delete()
@@ -42,7 +42,7 @@ def build(app: str, log=print, fresh=True):
     run(g, "MERGE (:Repo {name:$n})", {"n": app}, readonly=False)
     for label, prop in KEYS:
         run(g, f"CREATE INDEX FOR (n:{label}) ON (n.{prop})", readonly=False)
-    pins = dists.parse_pins(Path(spec["pins"]).read_text())
+    pins = pins_override or dists.parse_pins(Path(spec["pins"]).read_text())
     files, services, rows_files = {}, [], []
     # app code
     root = Path(spec["repo"])
@@ -85,8 +85,10 @@ def build(app: str, log=print, fresh=True):
             entry.add(q)
     # write
     batched(g, "UNWIND $rows AS r MERGE (s:Service {name:r.name}) SET s.version=r.version, s.kind=r.kind", services)
-    batched(g, "UNWIND $rows AS r MATCH (s:Service {name:r.service}) MERGE (f:File {path:r.path}) SET f.service=r.service, f.module=r.module, f.loc=r.loc "
-               "MERGE (s)-[:CONTAINS]->(f)", [dict(path=f.path, service=f.service, module=f.module, loc=f.loc) for f in files.values()])
+    def app_imports(f):
+        return sorted({f"{b}:{n}" for kind, b, names in f.imports if kind == "from" and b for n in (names or []) if n != "*"})[:60]
+    batched(g, "UNWIND $rows AS r MATCH (s:Service {name:r.service}) MERGE (f:File {path:r.path}) SET f.service=r.service, f.module=r.module, f.loc=r.loc, f.names=r.names, f.imports_from=r.imps "
+               "MERGE (s)-[:CONTAINS]->(f)", [dict(path=f.path, service=f.service, module=f.module, loc=f.loc, names=f.toplevel[:400], imps=app_imports(f)) for f in files.values()])
     batched(g, "UNWIND $rows AS r MATCH (f:File {path:r.file}) MERGE (c:Class {qname:r.qname}) SET c.file=r.file MERGE (f)-[:DEFINES]->(c)",
             [dict(qname=q, file=fp) for f in files.values() for q, fp, _b in f.classes])
     batched(g, "UNWIND $rows AS r MATCH (f:File {path:r.file}) MERGE (n:Function {qname:r.qname}) SET n.name=r.name, n.file=r.file, n.start=r.start, "

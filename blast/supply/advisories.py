@@ -126,7 +126,7 @@ def ingest_advisories(graph: str, pins: dict, log=print):
             total += 1
             cve = g["id"]
             cv = next((cvss3_score(x["score"]) for x in g["severity"] if x.get("type") == "CVSS_V3" and x["score"].startswith("CVSS:3")), None)
-            sev = g["sev_label"] or band(cv)
+            sev = band(cv) if cv is not None else (g["sev_label"] or "UNKNOWN")
             fixed = sorted(g["fixed"], key=lambda x: [int(p) if p.isdigit() else 0 for p in re.split(r"[.]", x)])
             run(graph, "MERGE (x:Vulnerability {id:$id}) SET x.osv=$osv, x.aliases=$al, x.severity=$sev, x.cvss=$cvss, x.summary=$sum, x.fixed=$fx, x.package=$pk "
                        "WITH x MATCH (s:Service {name:$pk}) MERGE (s)-[e:AFFECTED_BY]->(x) SET e.version=$ver",

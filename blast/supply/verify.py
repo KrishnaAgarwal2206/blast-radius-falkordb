@@ -14,20 +14,21 @@ from .apps import APPS, RUNNER_PYTHON
 
 CHECKS = {
     "httpie": [
-        ("httpie --version", ["-m", "httpie", "--version"]),
-        ("build a GET request offline (requests session + proxies + urllib3 pool)", ["-m", "httpie", "--ignore-stdin", "--offline", "GET", "http://example.org/anything", "q==1"]),
-        ("build a POST with JSON body offline", ["-m", "httpie", "--ignore-stdin", "--offline", "POST", "http://example.org/post", "a=b"]),
+        ("httpie --version", ["-m", "httpie", "--version"], ["pygments", "requests"]),
+        ("build a GET request offline (requests session + proxies + urllib3 pool)", ["-m", "httpie", "--ignore-stdin", "--offline", "GET", "http://example.org/anything", "q==1"], ["requests", "urllib3", "idna", "certifi", "charset-normalizer"]),
+        ("build a POST with JSON body offline", ["-m", "httpie", "--ignore-stdin", "--offline", "POST", "http://example.org/post", "a=b"], ["requests", "urllib3", "requests-toolbelt"]),
     ],
     "precommit": [
-        ("pre-commit --version", ["-m", "pre_commit", "--version"]),
-        ("validate a config file (YAML load path)", ["-m", "pre_commit", "validate-config", "{tmp}/.pre-commit-config.yaml"]),
+        ("pre-commit --version", ["-m", "pre_commit", "--version"], ["pyyaml"]),
+        ("validate a config file (YAML load path)", ["-m", "pre_commit", "validate-config", "{tmp}/.pre-commit-config.yaml"], ["pyyaml", "cfgv", "identify"]),
     ],
     "cookiecutter": [
-        ("cookiecutter --version", ["-m", "cookiecutter", "--version"]),
-        ("render a template (Jinja2 + click + file generation)", ["-m", "cookiecutter", "{tmp}/tpl", "--no-input", "-o", "{tmp}/out"]),
+        ("cookiecutter --version", ["-m", "cookiecutter", "--version"], ["click"]),
+        ("render a template (Jinja2 + click + file generation)", ["-m", "cookiecutter", "{tmp}/tpl", "--no-input", "-o", "{tmp}/out"], ["jinja2", "markupsafe", "click", "python-slugify", "binaryornot"]),
+        ("build an HTTP request with requests + urllib3 (no network)", ["-c", "import requests, urllib3; s = requests.Session(); p = s.prepare_request(requests.Request('GET', 'http://example.org/x', params={'a': 1})); m = urllib3.PoolManager(); print(p.url, type(m).__name__)"], ["requests", "urllib3", "idna", "certifi", "chardet", "charset-normalizer"]),
     ],
     "yamlfull": [
-        ("load a settings file", ["-c", "from yamlfull.config import load_settings; print(load_settings('{tmp}/s.yaml'))"]),
+        ("load a settings file", ["-c", "from yamlfull.config import load_settings; print(load_settings('{tmp}/s.yaml'))"], ["pyyaml"]),
     ],
 }
 
@@ -59,7 +60,7 @@ def run_checks(app: str, pins: dict, upgrades: dict, label: str, log=print) -> d
         (tmp / "tpl" / "cookiecutter.json").write_text('{"name": "demo", "greeting": "hello"}')
         (tmp / "tpl" / "{{cookiecutter.name}}" / "README.md").write_text("{{ cookiecutter.greeting|upper }} from {{ cookiecutter.name|title }}\n")
         env = {"PYTHONPATH": spec["repo"], "PATH": str(py.parent), "SYSTEMROOT": "C:\\Windows", "HOME": str(tmp), "USERPROFILE": str(tmp)}
-        for title, argv in CHECKS[app]:
+        for title, argv, exercises in CHECKS[app]:
             argv = [a.replace("{tmp}", tmp.as_posix()) for a in argv]
             t1 = time.perf_counter()
             try:
@@ -67,7 +68,7 @@ def run_checks(app: str, pins: dict, upgrades: dict, label: str, log=print) -> d
                 ok, tail = p.returncode == 0, re.sub(r"[A-Za-z]:[\\/][^\s'\"]*", "<path>", ((p.stdout + p.stderr).strip().splitlines() or [""])[-1])[:200]
             except subprocess.TimeoutExpired:
                 ok, tail = False, "timed out"
-            out["checks"].append(dict(title=title, ok=ok, ms=round((time.perf_counter() - t1) * 1000), tail=tail))
+            out["checks"].append(dict(title=title, ok=ok, ms=round((time.perf_counter() - t1) * 1000), tail=tail, exercises=exercises))
     finally:
         out["ms"] = round((time.perf_counter() - t0) * 1000)
         shutil.rmtree(venv, ignore_errors=True)

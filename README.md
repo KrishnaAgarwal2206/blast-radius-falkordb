@@ -27,10 +27,10 @@ On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none
 <!--BENCH-->
 | App (pinned lock) | Scanner alerts | of which high/critical | Reachable | No path found | Unknown | Upgrades planned | Pass smoke checks | Reachable alerts cleared by passing upgrades |
 |---|---|---|---|---|---|---|---|---|
-| HTTPie 2.6.0 | 25 | 11 | 3 | 0 | 22 (5 possible path) | 2 | 1 | 2 |
-| cookiecutter 1.7.3 | 24 | 8 | 6 | 1 | 17 (7 possible path) | 3 | 3 | 6 |
-| pre-commit 2.9.0 | 9 | 5 | 0 | 1 | 8 (0 possible path) | 0 | 0 | 0 |
-| yamlfull (positive control) | 1 | 1 | 1 | 0 | 0 (0 possible path) | 1 | 1 | 1 |
+| HTTPie 2.6.0 | 25 | 10 | 3 (0 via handler table) | 0 | 22 (5 possible path) | 2 | 1 | 2 |
+| cookiecutter 1.7.3 | 24 | 9 | 6 (3 via handler table) | 0 | 18 (7 possible path) | 3 | 3 | 6 |
+| pre-commit 2.9.0 | 9 | 5 | 0 (0 via handler table) | 1 | 8 (0 possible path) | 0 | 0 | 0 |
+| yamlfull (positive control) | 1 | 1 | 1 (0 via handler table) | 0 | 0 (0 possible path) | 1 | 1 | 1 |
 
 Total: 59 alerts, 10 reachable (17%).
 <!--/BENCH-->
@@ -52,6 +52,10 @@ Remove the graph and the product loses its core, not its chart:
 | Criticality | `algo.pageRank` / `betweenness` / `labelPropagation` over `DEPENDS_ON` (lens in the UI). |
 | Memory | `Decision` nodes in a shared `sc_memory` graph; a verdict in one app is recalled when the same advisory appears in another. |
 | Evidence | Every claim, step and action cites path ids returned by FalkorDB; the server drops any item whose paths or named CVE/commit ids are not in them. |
+
+**A decision only the graph makes: the upgrade preflight.** For every planned upgrade the pipeline also builds the *upgraded* graph (`sc_<app>__up_<pkg>`). The agent then diffs the two in FalkorDB: it asks the current graph for every name the code imports from the package, and asks the upgraded graph which of those names still exist. For HTTPie, `urllib3 -> 2.5.0` is **rejected by the graph before any test runs** (`urllib3.util.ssl_.DEFAULT_CIPHERS`, imported by HTTPie, no longer exists), and the throw-away-venv check then confirms it. Reachability is evaluated over thousands of functions across several packages; version constraints, class hierarchy, dispatch edges, the portfolio join and cross-app decisions are all stored and queried as graph structure.
+
+**What would degrade without FalkorDB** (honestly): a single verdict could be recomputed in an in-memory graph library; what could not be kept is the persistent multi-app store, the *two-graph* preflight diff, the cross-app Portfolio and Decision memory (`MATCH (d:Decision)-[:ABOUT]->(v)` across apps), the shared evidence the agent cites (path ids returned by the database), and the live Cypher/latency panel that is the product's explanation.
 
 Every Cypher query, with its server-side latency, streams to the "Under the hood" panel.
 

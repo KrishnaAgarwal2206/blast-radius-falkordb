@@ -40,7 +40,7 @@ def dispatch(graph, name, args):
         return core.dependent_owners(graph, args.get("services", []))
     if name.startswith("sc_"):
         from ..supply import agent as sa
-        return {"sc_findings": sa.t_findings, "sc_plan": sa.t_plan, "sc_checks": sa.t_checks, "sc_recall": sa.t_recall}[name](graph, args)
+        return {"sc_findings": sa.t_findings, "sc_plan": sa.t_plan, "sc_checks": sa.t_checks, "sc_recall": sa.t_recall, "sc_preflight": sa.t_preflight}[name](graph, args)
     if name == "run_cypher":
         return _cypher_tool(graph, args.get("query", ""))
     if name == "record_incident":

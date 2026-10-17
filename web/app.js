@@ -127,7 +127,7 @@ async function loadOverview() {
 function heroFor() {
   if (typeof legend === 'function') setTimeout(legend, 0);
   const sup = S.graph?.startsWith('sc_');
-  $('heroH').textContent = sup ? 'Which alerts can actually be exploited?' : 'What breaks if this changes?';
+  $('heroH').textContent = sup ? 'Which alerts can actually be reached?' : 'What breaks if this changes?';
   $('heroP').innerHTML = sup ? 'Your scanner flags every vulnerable package version. Blast Radius walks a <b>FalkorDB</b> graph of your code, its dependencies and their call paths to show which advisories have a <b>demonstrable route from an entry point</b> to the vulnerable function, then plans and checks the smallest fix.'
     : 'Paste a stack trace or name a service. An agent walks a live <b>FalkorDB</b> graph of code, commits, owners and past incidents, and every claim links to the exact path.';
   $('inp').placeholder = sup ? 'Type "triage", or a CVE id such as CVE-2020-14343' : 'Paste a Python stack trace, or name a service / file / function';
@@ -289,7 +289,7 @@ function renderAdvisories(x, box, V) {
     Object.entries(ck).forEach(([k, v]) => {
       const d = document.createElement('div'); d.className = 'chk2';
       d.innerHTML = `<div><b>${esc(k === 'baseline' ? 'baseline (current pins)' : 'with upgrade: ' + k)}</b> <span class="bdg ${v.ok ? 'ok' : 'bad'}">${v.ok ? 'PASS' : v.install_ok === false ? 'NOT INSTALLABLE' : 'FAIL'}</span></div>` +
-        (v.checks?.length ? v.checks.map((c) => `<div class="cl ${c.ok ? 'ok' : 'bad'}">${c.ok ? '✓' : '✗'} ${esc(c.title)}${c.ok ? '' : `<small>${esc(c.tail)}</small>`}</div>`).join('') : `<small>${esc(v.install_error || '')}</small>`);
+        (v.checks?.length ? v.checks.map((c) => `<div class="cl ${c.ok ? 'ok' : 'bad'}">${c.ok ? '✓' : '✗'} ${esc(c.title)}${c.exercises?.length ? ` <small>exercises: ${esc(c.exercises.join(', '))}</small>` : ''}${c.ok ? '' : `<small>${esc(c.tail)}</small>`}</div>`).join('') : `<small>${esc(v.install_error || '')}</small>`);
       box.appendChild(d);
     });
     box.insertAdjacentHTML('beforeend', `<small class="dim">Checks precomputed ${x.precomputed_at ? new Date(x.precomputed_at * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' UTC' : ''}. Smoke checks are not the app's full test suite.</small>`);

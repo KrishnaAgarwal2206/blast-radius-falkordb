@@ -17,7 +17,7 @@ from . import tools
 
 # $ per million tokens (Haiku 4.5)
 PRICE = {"in": 1.0, "out": 5.0, "cache_read": 0.10, "cache_write": 1.25}
-MAX_TURNS = 5
+MAX_TURNS = 3
 
 SYSTEM = """You are Blast Radius, an incident-investigation agent. You reason ONLY through a FalkorDB graph of a codebase \
 (Services = in-repo packages, Files, Functions, Commits, Persons, past Incidents). Never state a fact you did not get from a tool.
@@ -261,8 +261,8 @@ def pipeline(r: Run, text: str):
     if cr and svc:
         for rank, o in enumerate(cr.data["critical"][:3], 1):
             if o["uid"] == svc and o.get("path_id"):
-                claims.append(dict(kind="critical", text=f"{svc.split(':', 1)[1]} is the #{rank} single point of failure in this repo by PageRank over DEPENDS_ON ({o['dependents']} services depend on it directly).",
-                                   path_ids=[o["path_id"]], node_ids=[svc]))
+                claims.append(dict(kind="critical", text=f"{svc.split(':', 1)[1]} is the #{rank} single point of failure in this repo by PageRank over DEPENDS_ON ({o['dependents']} services depend on it directly; first 3 shown as paths).",
+                                   path_ids=o["path_ids"], node_ids=[svc]))
     interp = "" if target.strip() == text.strip() else f"Interpreted your input as {target if len(target) < 80 else tn}. "
     ans = dict(summary=f"{interp}{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
     return ans, seeds, shas
@@ -326,7 +326,7 @@ def _agent(r: Run, text: str, t0, remember):
     brief = json.dumps({"draft_claims": [{k: c[k] for k in ("kind", "text", "path_ids")} for c in draft["claims"]],
                         "paths": {pid: p["sentence"][:160] for pid, p in r.paths.items()}}, default=str)[:7000]
     msgs = [{"role": "user", "content": f"User input:\n{text[:3000]}\n\nThe deterministic graph tools already ran. Results:\n{brief}\n\n"
-             "Review them: fix any claim that looks wrong or irrelevant (e.g. a formatting commit as the cause), optionally call 1-2 tools to verify, "
+             "Review them: fix any claim that looks wrong or irrelevant (e.g. a formatting commit as the cause), call another tool ONLY if a claim is clearly wrong (prefer none), "
              "then call final_answer with concise claims, each citing path_ids from the results above."}]
     sys_blocks = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     schemas = [dict(t) for t in tools.TOOL_SCHEMAS]

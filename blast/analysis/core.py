@@ -318,9 +318,10 @@ def critical_nodes(graph, scope: str = "Service", top: int = 8) -> Result:
     for i, o in enumerate(out):
         res.nodes[o["uid"]] = dict(label=scope, key=o["uid"].split(":", 1)[1], name=o["uid"].split(":", 1)[1])
         if scope == "Service" and i < 5:
-            r = _q(res, graph, f"MATCH p=(x:Service)-[:DEPENDS_ON]->(t:Service {{name:$n}}) RETURN {PATH_PROJ} LIMIT 1", {"n": o["uid"].split(":", 1)[1]})
-            if r.rows:
-                o["path_id"] = res.add_path(*r.rows[0], pid=f"critical{i + 1}")
+            r = _q(res, graph, f"MATCH p=(x:Service)-[:DEPENDS_ON]->(t:Service {{name:$n}}) RETURN {PATH_PROJ} LIMIT 3", {"n": o["uid"].split(":", 1)[1]})
+            o["path_ids"] = [res.add_path(*row, pid=f"critical{i + 1}_{k + 1}") for k, row in enumerate(r.rows)]
+            if o["path_ids"]:
+                o["path_id"] = o["path_ids"][0]
         if scope == "Service":
             o["dependents"] = _q(res, graph, "MATCH (x:Service)-[:DEPENDS_ON]->(:Service {name:$n}) RETURN count(x)", {"n": o["uid"].split(":", 1)[1]}).rows[0][0]
     res.data["critical"] = out

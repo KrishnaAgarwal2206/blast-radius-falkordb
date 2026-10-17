@@ -26,4 +26,5 @@ for t, tot, hc, r, n, u, rhc, np_, nok, cl in rows:
     print(f"| {t} | {tot} | {hc} | {r} | {n} | {u} | {np_} | {nok} | {cl} |")
 tt = sum(r[1] for r in rows)
 rr = sum(int(str(r[3]).split()[0]) for r in rows)
-print(f"\nTotal: {tt} alerts, {rr} reachable ({100 * rr / max(tt, 1):.0f}%).")
+tb = sum(int(str(r[3]).split("(")[1].split()[0]) for r in rows)
+print(f"\nTotal: {tt} alerts, {rr} reachable ({100 * rr / max(tt, 1):.0f}%): {rr - tb} are direct call paths and {tb} reach a function only through a handler table (available to templates; exploitation needs a template that calls it).")

@@ -32,7 +32,7 @@ On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none
 | pre-commit 2.9.0 | 9 | 5 | 0 (0 via handler table) | 1 | 8 (0 possible path) | 0 | 0 | 0 |
 | yamlfull (positive control) | 1 | 1 | 1 (0 via handler table) | 0 | 0 (0 possible path) | 1 | 1 | 1 |
 
-Total: 59 alerts, 10 reachable (17%).
+Total: 59 alerts, 10 reachable (17%): 7 are direct call paths and 3 reach a function only through a handler table (available to templates; exploitation needs a template that calls it).
 <!--/BENCH-->
 
 * Alerts come from [OSV.dev](https://osv.dev) for the pinned versions, the same set a package-name scanner reports. Apps are real OSS projects at a real tag with the dependency versions an unrefreshed lock would pin (documented in `data/apps/*.pins.txt`). `yamlfull` is a positive control, not a real project.

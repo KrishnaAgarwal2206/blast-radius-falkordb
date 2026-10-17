@@ -8,7 +8,7 @@ playwright = pytest.importorskip("playwright.sync_api")
 import httpx  # noqa: E402
 
 BASE = os.getenv("BLAST_URL", "http://localhost:8000")
-SHOTS = Path(__file__).parent / "shots"
+SHOTS = Path(os.getenv("SHOTS_DIR") or __import__("tempfile").gettempdir()) / "blast_shots"
 
 
 def _up():

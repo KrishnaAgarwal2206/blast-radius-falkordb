@@ -27,7 +27,7 @@ def dispatch(graph, name, args):
     if name == "blast_radius":
         return core.blast_radius(graph, args.get("target", ""), int(args.get("max_depth", 3)))
     if name == "suspect_changes":
-        return core.suspect_changes(graph, args.get("nodes", []), int(args.get("window_days", 120)))
+        return core.suspect_changes(graph, args.get("nodes", []), int(args.get("window_days", 120)), focus=args.get("focus"))
     if name == "who_to_page":
         return core.who_to_page(graph, args.get("nodes", []), args.get("suspect_shas"))
     if name == "recall_incidents":

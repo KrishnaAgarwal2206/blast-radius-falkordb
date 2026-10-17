@@ -104,7 +104,7 @@ The LLM loop uses Claude Haiku 4.5 with prompt caching, ≤9 turns, compact tool
 
 ## Tests
 
-`make test` → 31 tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
+`make test` → 38 tests (guard, ingestion idempotence/indexes, every analysis function on a fixture graph, golden scenarios, agent claim verification) + Playwright end-to-end (`tests/e2e`).
 
 ## Limitations / next steps
 

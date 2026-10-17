@@ -86,7 +86,7 @@ class Run:
         return res, tools.compact(res)
 
     # --- verify a model-produced answer against what the graph actually returned
-    def finalize(self, answer: dict):
+    def finalize(self, answer: dict, emit: bool = True):
         claims, dropped = [], 0
         for c in answer.get("claims", []):
             pids = [p for p in c.get("path_ids", []) if p in self.paths]
@@ -96,7 +96,7 @@ class Run:
                 continue
             claims.append(dict(kind=c.get("kind", "impact"), text=c["text"], path_ids=pids, node_ids=nids,
                                claim_id=f"c{len(claims) + 1}"))
-        for c in claims:
+        for c in (claims if emit else []):
             self.send("claim", **c)
         by = lambda k: [c for c in claims if c["kind"] == k]
         out = dict(summary=answer.get("summary", ""), confidence=answer.get("confidence"),
@@ -155,7 +155,9 @@ def _find_target(r: Run, text: str):
         return one
     toks = sorted({t.strip(".,:;()'\"`") for t in re.findall(r"[\w./\-]{4,}", text)}, key=lambda t: (-bool(re.search(r"[/.\-_]", t)), -len(t)))
     for t in toks[:25]:
-        if core.resolve_target(r.graph, t)[0]:
+        if not re.search(r"[/.\-_]", t) and len(t) < 14:
+            continue   # generic words (thread, exporter...) are not evidence of a target
+        if core.resolve_target(r.graph, t, strict=True)[0]:
             return t
     return None
 
@@ -164,6 +166,9 @@ def pipeline(r: Run, text: str):
     """Same tools, fixed order, templated claims. Zero LLM cost."""
     is_trace = "Traceback" in text or 'File "' in text
     origin, frame_nodes, tr = None, [], None
+    if re.search(r"^\s+at [\w.$<>]+\(.*\)|Caused by: |\.java:\d+|\.go:\d+|\.js:\d+:\d+", text, re.M) and not is_trace:
+        r.send("error", message="This looks like a non-Python stack trace. Blast Radius currently ingests Python repos only; paste a Python traceback, or name a service/file/function.", recoverable=False)
+        return None
     if is_trace:
         tr, _ = r.call("trace_stacktrace", {"text": text}, "t1")
         if tr and tr.data.get("origin"):
@@ -193,7 +198,8 @@ def pipeline(r: Run, text: str):
         seeds = list(dict.fromkeys(frame_nodes))
     else:
         seeds = [root]
-    sc, _ = r.call("suspect_changes", {"nodes": seeds}, "t3")
+    focus = [x for x in ([tr.data.get("origin"), tr.data.get("origin_file")] if origin else []) if x]
+    sc, _ = r.call("suspect_changes", {"nodes": seeds, "focus": focus}, "t3")
     sus = sc.data.get("suspects", []) if sc else []
     shas = [x["sha"] for x in sus]
     wp, _ = r.call("who_to_page", {"nodes": ([svc] if svc else []) + seeds[:8], "suspect_shas": shas[:3]}, "t4")
@@ -215,16 +221,20 @@ def pipeline(r: Run, text: str):
         for x in wp.data["page"][:2]:
             claims.append(dict(kind="page", text=f"Page {x['name']}: {x['why'][:200]}{' (no commits in 90+ days, may be inactive)' if x['inactive'] else ''}.", path_ids=[x["path_id"]], node_ids=[x["uid"]]))
     if rc and rc.data["similar"]:
-        x = rc.data["similar"][0]
-        who = "Your earlier investigation" if x["source"] == "live" else "Similar past incident"
-        claims.append(dict(kind="similar", text=f"{who} {x['id']}: \"{x['title'][:70]}\" (shares {len(x['shared_files'])} file(s), similarity {x['similarity']}).",
-                           path_ids=[x["path_id"]], node_ids=[x["uid"]]))
+        sims = rc.data["similar"]
+        hist = [x for x in sims if x["source"] != "live"][:1]
+        mine = [x for x in sims if x["source"] == "live"][:1]
+        for x in hist + mine:
+            who = "Your earlier investigation" if x["source"] == "live" else "Similar past incident (from repo history)"
+            claims.append(dict(kind="similar", text=f"{who} {x['id']}: \"{x['title'][:70]}\" (shares {len(x['shared_files'])} file(s), similarity {x['similarity']}).",
+                               path_ids=[x["path_id"]], node_ids=[x["uid"]]))
     if cr and svc:
         for rank, o in enumerate(cr.data["critical"][:3], 1):
             if o["uid"] == svc and o.get("path_id"):
                 claims.append(dict(kind="critical", text=f"{svc.split(':', 1)[1]} is the #{rank} single point of failure in this repo by PageRank over DEPENDS_ON ({o['dependents']} services depend on it directly).",
                                    path_ids=[o["path_id"]], node_ids=[svc]))
-    ans = dict(summary=f"{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
+    interp = "" if target.strip() == text.strip() else f"Interpreted your input as {target if len(target) < 80 else tn}. "
+    ans = dict(summary=f"{interp}{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
     return ans, seeds, shas
 
 
@@ -281,6 +291,7 @@ def _agent(r: Run, text: str, t0, remember):
         r.send("run_finished", answer=None, ms=round((time.perf_counter() - t0) * 1000), usage=r.tokens, cost_usd=0)
         return None
     draft, seeds, shas = out
+    r.send("draft_answer", answer=r.finalize(draft, emit=False))
     brief = json.dumps({"draft_claims": [{k: c[k] for k in ("kind", "text", "path_ids")} for c in draft["claims"]],
                         "paths": {pid: p["sentence"][:160] for pid, p in r.paths.items()}}, default=str)[:7000]
     msgs = [{"role": "user", "content": f"User input:\n{text[:3000]}\n\nThe deterministic graph tools already ran. Results:\n{brief}\n\n"

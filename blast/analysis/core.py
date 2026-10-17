@@ -65,7 +65,7 @@ def snapshot_time(graph) -> int:
 
 
 # ---------------------------------------------------------------- target resolution
-def resolve_target(graph, text: str, res: Result | None = None):
+def resolve_target(graph, text: str, res: Result | None = None, strict: bool = False):
     """Map free text to (label, key). Tries Service, File, Function in that order."""
     text = text.strip().strip("`'\"")
     res = res or Result("resolve")
@@ -75,7 +75,7 @@ def resolve_target(graph, text: str, res: Result | None = None):
         ("MATCH (n:Function) WHERE (n.qname = $t OR n.qname ENDS WITH ('.' + $t)) RETURN n.qname ORDER BY size(n.qname) LIMIT 1", "Function", {"t": text}),
         ("MATCH (n:Service) WHERE n.name CONTAINS $t RETURN n.name ORDER BY size(n.name) LIMIT 1", "Service", {"t": text.lower()}),
         ("MATCH (n:File) WHERE n.path CONTAINS $t RETURN n.path ORDER BY size(n.path) LIMIT 1", "File", {"t": text}),
-    ]:
+    ][: 3 if strict else 5]:
         r = _q(res, graph, q, params)
         if r.rows:
             return label, r.rows[0][0]
@@ -94,9 +94,11 @@ def blast_radius(graph, target: str, max_depth: int = 3) -> Result:
     res.data["target"] = uid(label, key)
     impacted = {}  # uid -> (depth, path_id)
 
-    def collect(cypher, params):
+    def collect(cypher, params, tail=None):
         for ns, rs in _q(res, graph, cypher, params).rows:
             u = uid(*ns[0][:2])
+            if tail:   # extend the path so it really ends at the failing node (e.g. File -DEFINES-> Function)
+                ns, rs = ns + tail[0], rs + tail[1]
             d = len(rs)
             if u not in impacted or impacted[u][0] > d:
                 impacted[u] = (d, ns, rs)
@@ -112,8 +114,10 @@ def blast_radius(graph, target: str, max_depth: int = 3) -> Result:
         collect(f"MATCH p=(x:Function)-[:CALLS*1..{d}]->(t:Function {{qname:$k}}) RETURN {PATH_PROJ} LIMIT 400", {"k": key})
         f = _q(res, graph, "MATCH (s:Service)-[:CONTAINS]->(f:File)-[:DEFINES]->(:Function {qname:$k}) RETURN f.path, s.name", {"k": key}).rows
         if f:
-            collect(f"MATCH p=(x:File)-[:IMPORTS*1..{d}]->(t:File {{path:$k}}) RETURN {PATH_PROJ} LIMIT 300", {"k": f[0][0]})
-            collect(f"MATCH p=(x:Service)-[:DEPENDS_ON*1..{d}]->(t:Service {{name:$k}}) RETURN {PATH_PROJ} LIMIT 200", {"k": f[0][1]})
+            fn_node = ["Function", key, key]
+            collect(f"MATCH p=(x:File)-[:IMPORTS*1..{d}]->(t:File {{path:$k}}) RETURN {PATH_PROJ} LIMIT 300", {"k": f[0][0]}, ([fn_node], ["DEFINES"]))
+            collect(f"MATCH p=(x:Service)-[:DEPENDS_ON*1..{d}]->(t:Service {{name:$k}}) RETURN {PATH_PROJ} LIMIT 200", {"k": f[0][1]},
+                    ([["File", f[0][0], f[0][0]], fn_node], ["CONTAINS", "DEFINES"]))
             res.data["service"] = uid("Service", f[0][1])
     else:
         collect(f"MATCH p=(x:Service)-[:DEPENDS_ON*1..{d}]->(t:Service {{name:$k}}) RETURN {PATH_PROJ} LIMIT 300", {"k": key})
@@ -129,7 +133,7 @@ def blast_radius(graph, target: str, max_depth: int = 3) -> Result:
 
 
 # ---------------------------------------------------------------- stack trace
-NOISY_MSG = re.compile(r"(line length|reformat|formatting|\blint|ruff|black\b|isort|pre-commit|typo|typing|type hint|mypy|pyright|pylint|docs?:|documentation|changelog|bump|dependabot|renovate|\bci\b|workflow)", re.I)
+NOISY_MSG = re.compile(r"(line length|reformat|formatting|\blint|ruff|black\b|isort|pre-commit|typo|annotation|docstring|return type|typing|type hint|mypy|pyright|pylint|docs?:|documentation|changelog|bump|dependabot|renovate|\bci\b|workflow)", re.I)
 FRAME = re.compile(r'File "([^"]+)", line (\d+), in ([\w<>]+)')
 
 
@@ -179,8 +183,9 @@ def trace_stacktrace(graph, text: str) -> Result:
 
 
 # ---------------------------------------------------------------- suspects
-def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: int = 5) -> Result:
-    """Rank commits touching the impacted subgraph by recency x churn x proximity."""
+def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: int = 5, focus: list[str] | None = None) -> Result:
+    """Rank commits touching the impacted subgraph by recency x churn x proximity.
+    `focus` = the failing node(s) (origin of a stack trace); other seeds (caller frames) count for far less."""
     t0 = time.perf_counter()
     res = Result("suspect_changes")
     track()
@@ -214,22 +219,25 @@ def suspect_changes(graph, node_uids: list[str], window_days: int = 120, top: in
     best = {}
     for w, rel, (sha, msg, ts, adds, dels, ns, rs) in rows:
         age = (now - ts) / 86400
-        score = w * math.exp(-math.log(2) * age / 30) * (1 + math.log1p((adds or 0) + (dels or 0)))
+        tgt = uid(*ns[-1][:2])
+        caller = bool(focus) and rel in ("function", "file") and tgt not in focus
+        score = w * (0.2 if caller else 1.0) * math.exp(-math.log(2) * age / 30) * (1 + math.log1p((adds or 0) + (dels or 0)))
         if NOISY_MSG.search(msg or ""):
             score *= 0.15   # formatting / lint / typing / docs churn is rarely the cause of an incident
         if sha not in best or score > best[sha]["score"]:
-            best[sha] = dict(sha=sha, msg=msg, age_days=round(age, 1), score=round(score, 3), via=rel, ns=ns, rs=rs)
+            best[sha] = dict(sha=sha, msg=msg, age_days=round(age, 1), score=round(score, 3), via=("caller" if caller else rel), ns=ns, rs=rs)
     out = []
-    ranked = sorted(best.values(), key=lambda x: -x["score"])
+    # commits that touched the failing frame itself always outrank commits that only touched callers/dependencies
+    ranked = sorted(best.values(), key=lambda x: (0 if x["via"] in ("function", "file") else 1, -x["score"]))
     quiet = [b for b in ranked if not NOISY_MSG.search(b["msg"] or "")]
     if quiet:   # formatting/lint/typing churn only survives when nothing else touched the code
         ranked = quiet
-    direct = [b for b in ranked if b["via"] in ("function", "file")]
+    direct = [b for b in ranked if b["via"] in ("function", "file", "caller")]
     if len(direct) >= 3:   # enough direct evidence: ignore commits that only touched a dependency
         ranked = direct
     for b in ranked[:top]:
         b["reason"] = {"function": "edited this function's lines", "file": "edited the failing file", "dependency": "edited a file the failing code imports",
-                       "service": "edited another file in the same package"}[b["via"]]
+                       "service": "edited another file in the same package", "caller": "edited a caller higher in the stack trace (not the failing frame)"}[b["via"]]
         pid = res.add_path(b.pop("ns"), b.pop("rs"), pid=f"suspect{len(out) + 1}")
         out.append(dict(b, uid=uid("Commit", b["sha"]), path_id=pid))
     res.data["suspects"] = out

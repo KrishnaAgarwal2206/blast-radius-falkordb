@@ -8,3 +8,4 @@ data/repos/
 .pytest_cache/
 data/replay/
 data/spend_ledger.json
+tests/e2e/shots/

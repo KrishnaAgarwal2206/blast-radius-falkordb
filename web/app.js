@@ -147,7 +147,7 @@ function reset() {
   [...S.base.keys()].length && addLinks(S.baseLinks || []);
 }
 async function start(input, { llm = false, replay = null } = {}) {
-  S.es?.close(); S.lastInput = input; reset(); $('hero').classList.add('gone'); selectTab('hood');
+  S.es?.close(); S.lastInput = input; S.userTab = false; reset(); $('hero').classList.add('gone'); selectTab('hood');
   $('inp').value = input || $('inp').value; S.running = true; sync();
   let url;
   if (replay) { url = `/api/replays/${replay}`; $('pill').className = 'pill replay'; $('pill').textContent = `REPLAY · ${replay}`; }
@@ -191,6 +191,7 @@ function handle(e, k, skip) {
     case 'path': return animatePath(e, k, skip);
     case 'claim': S.claims.push(e); return 40;
     case 'error': feed(`! ${e.message}`, 'e'); toast(e.message); return 100;
+    case 'draft_answer': finish({ answer: e.answer, ms: '…', cost_usd: '…' }); feed('Graph answer ready; LLM is reviewing it…', 't'); return 0;
     case 'run_finished': S.running = false; finish(e); return 0;
   }
   return 0;
@@ -216,7 +217,7 @@ function markRecalled(e) { (e.node_ids || []).forEach((id) => { if (id.startsWit
 function feed(t, cls) { const d = document.createElement('div'); d.className = cls; d.textContent = t; const f = $('feed'); f.appendChild(d); while (f.children.length > 40) f.firstChild.remove(); f.scrollTop = 1e9; }
 function toast(m) { const d = document.createElement('div'); d.className = 'err-box'; d.textContent = m; const t = $('tab-hood'); t.prepend(d); setTimeout(() => d.remove(), 6000); }
 function selectTab(n) { document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === n)); $('tab-answer').hidden = n !== 'answer'; $('tab-hood').hidden = n !== 'hood'; }
-document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
+document.querySelectorAll('.tabs button').forEach((b) => (b.onclick = () => { S.userTab = true; selectTab(b.dataset.tab); }));
 function highlight(c) {
   const lines = esc(c).replace(/(--[^\n]*)/g, '<span class="cm">$1</span>');
   return lines.replace(/(&#39;(?:[^&]|&(?!#39;))*&#39;)|(\$\w+)|(\[:[A-Z_|]+(?:\*[\d.]*)?\])|(:[A-Za-z_]\w*)|\b(\d+(?:\.\d+)?)\b|\b(MATCH|OPTIONAL|WHERE|RETURN|WITH|ORDER BY|LIMIT|CALL|YIELD|AS|IN|AND|OR|NOT|DISTINCT|UNWIND|CREATE|MERGE|SET|ENDS WITH|CONTAINS|ON|DESC|COALESCE|NULL|IS)\b|\b([a-zA-Z_.]+)\(/g,
@@ -240,7 +241,7 @@ function addQuery(e) {
 }
 function closeGroup(e) { const G = S.groups?.[e.call_id]; if (G) G.el.querySelector('.st').textContent = `${G.n} queries · ${G.ms.toFixed(1)} ms`; }
 function finish(e) {
-  const a = e.answer, box = $('tab-answer'); selectTab('answer');
+  const a = e.answer, box = $('tab-answer'); if (!S.userTab) selectTab('answer');
   if (!a) { box.innerHTML = `<div class="err-box"><b>No answer.</b> ${esc(S.lastError || 'Nothing in the graph matched that input. Try a service name such as opentelemetry-sdk, or paste a Python traceback.')}</div>`; return; }
   box.innerHTML = `<div class="summary">${esc(a.summary)}</div><div class="meta">${e.ms ?? ''} ms · ${S.q.n} FalkorDB queries (${S.q.ms.toFixed(1)} ms) · confidence ${a.confidence ?? '–'} · LLM cost $${e.cost_usd ?? 0}</div>
   <div class="meta">Click a claim to highlight its exact graph path.</div>`;

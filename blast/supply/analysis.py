@@ -35,6 +35,17 @@ def band(score):
     return "UNKNOWN" if score is None else "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MEDIUM" if score >= 4 else "LOW"
 
 
+def _possible(res, graph, fns):
+    """Shortest path that uses at least one MAYBE_CALLS edge (receiver type unresolved), over all vulnerable functions."""
+    best = None
+    for fq in fns[:8]:
+        r = _q(res, graph, "MATCH (e:Function {entry:true}),(v:Function {qname:$q}) WITH e,v,shortestPath((e)-[:CALLS|MAYBE_CALLS*..25]->(v)) AS p "
+                           f"WHERE p IS NOT NULL RETURN length(p), {PATH_PROJ} ORDER BY length(p) LIMIT 1", {"q": fq}, timeout=30000)
+        if r.rows and (best is None or r.rows[0][0] < best[0]):
+            best = (r.rows[0][0], r.rows[0][1], r.rows[0][2], fq)
+    return best
+
+
 def verdicts(graph: str) -> Result:
     """For every advisory affecting a pinned version: reachable / no path found within analyzed scope / unknown."""
     t0 = time.perf_counter()
@@ -58,6 +69,13 @@ def verdicts(graph: str) -> Result:
             item["hops"] = best[0]
             item["target"] = best[3]
             res.edges.append((vuid, "VULNERABLE_IN", uid("Function", best[3])))
+        elif fns and (poss := _possible(res, graph, fns)):
+            item["verdict"] = "unknown"
+            item["reason"] = "possible_via_dynamic_dispatch"
+            item["possible_path_id"] = res.add_path(poss[1], poss[2], pid=f"maybe{len(out) + 1}")
+            item["hops"] = poss[0]
+            item["target"] = poss[3]
+            res.edges.append((vuid, "VULNERABLE_IN", uid("Function", poss[3])))
         elif fns:
             item["verdict"] = "no_path_found"
             # evidence of what the analysis DID reach: the closest function in the same file as the vulnerable one

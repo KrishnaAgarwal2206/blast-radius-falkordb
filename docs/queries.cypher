@@ -28,3 +28,28 @@ MATCH (a:Service {name:$a}),(b:Service {name:$b}) WITH shortestPath((a)-[:IMPORT
 CALL algo.pageRank('Service','DEPENDS_ON') YIELD node, score RETURN node.name, score ORDER BY score DESC LIMIT 8;
 CALL algo.betweenness({nodeLabels:['Service'], relationshipTypes:['DEPENDS_ON']}) YIELD node, score RETURN node.name, score;
 CALL algo.labelPropagation({nodeLabels:['Service'], relationshipTypes:['DEPENDS_ON']}) YIELD node, communityId RETURN node.name, communityId;
+
+// ================= Supply-chain mode (Reachability-to-Repair) =================
+// Reachability: entry point -> function the advisory's fix commit changed (one query per advisory)
+MATCH (e:Function {entry:true}),(v:Function {qname:$q})
+WITH e, v, shortestPath((e)-[:CALLS*..25]->(v)) AS p WHERE p IS NOT NULL
+RETURN length(p), nodes(p), relationships(p) ORDER BY length(p) LIMIT 1;
+
+// Evidence for "no path found": what the analysis DID reach in the same file as the vulnerable function
+MATCH (v:Function {qname:$q})<-[:DEFINES]-(f:File)-[:DEFINES]->(s:Function) WHERE s.qname <> $q
+WITH s MATCH (e:Function {entry:true}) WITH e, s, shortestPath((e)-[:CALLS*..25]->(s)) AS p WHERE p IS NOT NULL
+RETURN length(p), nodes(p) ORDER BY length(p) LIMIT 1;
+
+// Advisories affecting pinned versions, with the functions inferred from their fix commits
+MATCH (s:Service)-[a:AFFECTED_BY]->(x:Vulnerability) OPTIONAL MATCH (x)-[:VULNERABLE_IN]->(f:Function)
+RETURN x.id, s.name, a.version, x.severity, x.cvss, x.fixed, collect(f.qname);
+
+// Upgrade planning: every dependent's version specifier on a package (re-queried after an upgrade changes them)
+MATCH (d:Service)-[e:DEPENDS_ON]->(p:Service {name:$p}) RETURN d.name, e.spec;
+
+// Class hierarchy as graph structure: does this loader inherit the vulnerable constructor?
+MATCH (c:Class {qname:'yaml.loader.SafeLoader'})-[:EXTENDS*1..6]->(b:Class) RETURN b.qname;
+
+// Cross-app memory (graph sc_memory): earlier verdicts about the same advisory in other apps
+MATCH (d:Decision)-[:ABOUT]->(v:Vulnerability) WHERE v.id IN $ids AND d.app <> $app
+RETURN d.app, d.vuln, d.verdict, d.why ORDER BY d.ts DESC;

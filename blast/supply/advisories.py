@@ -70,25 +70,31 @@ def diff_functions(url):
         return r.text if r.status_code == 200 else ""
     text = _cached("diff:" + url, go)
     out, path, names = [], None, set()
+    cur = None                      # name of the function enclosing the current diff line (None = module level)
     for ln in text.splitlines():
         if ln.startswith("diff --git"):
             if path:
                 out.append((path, sorted(names)))
             m = re.match(r"diff --git a/(\S+) b/(\S+)", ln)
-            path, names = (m.group(2) if m else None), set()
+            path, names, cur = (m.group(2) if m else None), set(), None
             if path and (not path.endswith(".py") or re.search(r"(^|/)(tests?|docs?)/", path)):
                 path = None
         elif path and ln.startswith("@@"):
             m = HUNK.match(ln)
-            if m:
-                c = m.group(1)
-                d = DEF.match(c)
-                if d:
-                    names.add(d.group(1))
-        elif path and ln[:1] in "+-" and not ln.startswith(("+++", "---")):
-            d = DEF.match(ln[1:])
+            d = DEF.match(m.group(1)) if m else None
+            cur = d.group(1) if d else None          # git's hunk header names the def that precedes the hunk
+        elif path and ln[:1] in "+- " and not ln.startswith(("+++", "---")):
+            body = ln[1:]
+            d = DEF.match(body)
             if d:
-                names.add(d.group(1))
+                cur = d.group(1)
+            elif body[:1].isalpha() and not body.startswith(("def ", "async ", "class ")) and not body.startswith((")", "]", "}")):
+                cur = None                           # unindented module-level statement ends the function
+            if ln[0] in "+-" and cur:
+                names.add(cur)
+            elif ln[0] == "-" and cur is None:
+                # module-level change (e.g. a handler registration removed): the functions it referenced as Class.handler are the affected code
+                names.update(re.findall(r"\b[A-Z]\w*\.(\w+)\b(?!\s*\()", body))
     if path:
         out.append((path, sorted(names)))
     return [(p, n) for p, n in out if n]

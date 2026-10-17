@@ -87,7 +87,7 @@ def pipeline(r, text):
     claims, actions = [], []
     claims.append(dict(kind="impact", text=f"{len(F)} advisories match {spec['title']}'s pinned versions ({hc} high/critical): a package-name scanner would flag all of them. "
                                           f"Graph analysis: {len(reach)} reachable from an entry point, {len(nopath)} with no path found in the analyzed scope, {len(unknown)} unknown "
-                                          f"(vulnerable function could not be identified).",
+                                          f"(vulnerable function not identified, or only a possible path via unresolved dynamic dispatch: {sum(1 for f in unknown if f.get('possible_path_id'))} of those).",
                        path_ids=[f["path_id"] for f in reach[:3]] or [f["sibling_path_id"] for f in nopath if f.get("sibling_path_id")][:3],
                        node_ids=[uid("Vulnerability", f["id"]) for f in F[:60]]))
     for f in sorted(reach, key=lambda x: -(x["cvss"] or 0))[:4]:
@@ -100,6 +100,10 @@ def pipeline(r, text):
                                                     f"the app does reach {short('Function:' + f['sibling'])} in the same file, but not the vulnerable {short('Function:' + f['functions'][0])}. "
                                                     f"This is a static-analysis result, not a proof of non-exploitability.",
                                path_ids=[f["sibling_path_id"]], node_ids=[uid("Vulnerability", f["id"])]))
+    for f in sorted([x for x in unknown if x.get("possible_path_id")], key=lambda x: -(x["cvss"] or 0))[:2]:
+        claims.append(dict(kind="possible", text=f"{f['id']} ({f['package']} {f['version']}, {f['severity']}{', CVSS ' + str(f['cvss']) if f['cvss'] else ''}) is UNKNOWN, with a POSSIBLE path: "
+                                               f"{f['hops']} hops to {short('Function:' + f['target'])}, but at least one hop is a dynamic call whose receiver type could not be resolved (MAYBE_CALLS). Review manually.",
+                           path_ids=[f["possible_path_id"]], node_ids=[uid("Vulnerability", f["id"])]))
     for d in decisions[:2]:
         mine = next((f for f in F if f["id"] == d["vuln"]), None)
         if mine and (mine.get("path_id") or mine.get("sibling_path_id")):
@@ -159,9 +163,9 @@ def pipeline(r, text):
                        f"{len(upgrades)} upgrade(s) pass smoke checks and clear {sum(len(c['cleared_in_scope']) for c in cands if c['package'] in upgrades)} reachable finding(s).",
                confidence=0.6, claims=claims, actions=actions,
                extras=dict(app=app, title=spec["title"], scanner=dict(total=len(F), high_or_critical=hc), counts=dict(reachable=len(reach), no_path_found=len(nopath), unknown=len(unknown)),
-                           findings=[dict(id=f["id"], package=f["package"], version=f["version"], severity=f["severity"], cvss=f["cvss"], verdict=f["verdict"], fixed=f["fixed"][:2],
+                           findings=[dict(id=f["id"], package=f["package"], version=f["version"], severity=f["severity"], cvss=f["cvss"], verdict=f["verdict"], reason=f.get("reason"), fixed=f["fixed"][:2],
                                           function=(f["functions"][0].split(".")[-1] if f["functions"] else None), mapping=f["mapping"], hops=f.get("hops"),
-                                          path_id=f.get("path_id") or f.get("sibling_path_id")) for f in sorted(F, key=lambda x: (["reachable", "no_path_found", "unknown"].index(x["verdict"]), -(x["cvss"] or 0)))],
+                                          path_id=f.get("path_id") or f.get("possible_path_id") or f.get("sibling_path_id")) for f in sorted(F, key=lambda x: (["reachable", "no_path_found", "unknown"].index(x["verdict"]), -(x["cvss"] or 0)))],
                            checks={k: dict(ok=bool(v.get("checks")) and all(c["ok"] for c in v["checks"]), install_ok=v.get("install_ok"), install_error=v.get("install_error"),
                                            checks=[dict(title=c["title"], ok=c["ok"], tail=c["tail"][:160]) for c in v.get("checks", [])]) for k, v in checks.items()},
                            precomputed_at=cr.data.get("precomputed_at") if cr else None))

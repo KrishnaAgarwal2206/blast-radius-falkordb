@@ -16,6 +16,7 @@ class FileInfo:
     calls: list = field(default_factory=list)      # (caller_qname, call_expr, cls)
     symbols: dict = field(default_factory=dict)    # local name -> (module, attr|None)
     callargs: list = field(default_factory=list)   # (caller_qname, call_expr, [(position|keyword, arg_expr)])
+    dicts: dict = field(default_factory=dict)      # module-level NAME = {key: handler, ...}: name -> [handler exprs]
     partials: dict = field(default_factory=dict)   # NAME = functools.partial(F, k=v): name -> (F expr, [(key, expr)])
     stars: list = field(default_factory=list)      # `from X import *` bases
     aliases: dict = field(default_factory=dict)    # module-level NAME = <expr>: candidate dotted exprs (class-valued aliases)
@@ -41,6 +42,11 @@ def _expr_name(f) -> str | None:
     if isinstance(f, ast.Call) and isinstance(f.func, ast.Name) and f.func.id == "super":
         parts.append("super()")
         return ".".join(reversed(parts))
+    if isinstance(f, ast.Call) and parts:                      # Cls(...).method(...): constructor result used immediately
+        inner = _expr_name(f.func)
+        if inner and inner != "super":
+            parts.append(inner + "()")
+            return ".".join(reversed(parts))
     return None
 
 
@@ -109,7 +115,7 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
                             break
                 decos = [d for d in (_expr_name(x.func if isinstance(x, ast.Call) else x) for x in n.decorator_list) if d]
                 fi.funcs.append(dict(qname=q, name=n.name, start=n.lineno, end=getattr(n, "end_lineno", n.lineno), cls=cls, file=display or rel,
-                                     decorators=decos, vartypes=vartypes, rettype=rettype, params=[a.arg for a in n.args.args + n.args.kwonlyargs]))
+                                     decorators=decos, vartypes=vartypes, rettype=rettype, names=sorted({c.id for c in ast.walk(n) if isinstance(c, ast.Name) and isinstance(c.ctx, ast.Load)}), params=[a.arg for a in n.args.args + n.args.kwonlyargs]))
                 for c in ast.walk(n):
                     if isinstance(c, ast.Call):
                         cn = _call_name(c)
@@ -129,6 +135,11 @@ def parse_file(root: Path, rel: str, service: str, module: str | None = None, di
             ca += [(k.arg, _expr_name(k.value)) for k in n.value.keywords if k.arg and _expr_name(k.value)]
             if cn and ca:
                 fi.callargs.append((f"<module>:{mod}", cn, ca))
+    for n in tree.body:   # module-level handler tables such as  FILTERS = {"upper": do_upper, ...}
+        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Dict):
+            hs = [e for e in (_expr_name(v) for v in n.value.values) if e]
+            if hs:
+                fi.dicts[n.targets[0].id] = hs
     for n in tree.body:   # module-level partials
         if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name) and isinstance(n.value, ast.Call):
             if (_call_name(n.value) or "").split(".")[-1] == "partial" and n.value.args and _expr_name(n.value.args[0]):

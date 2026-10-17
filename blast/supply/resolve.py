@@ -4,6 +4,11 @@ local `x = Cls()` types and simple return types. Anything it cannot resolve stay
 import re
 
 
+COMMON = set("""get set add update keys items values append extend pop remove read write close join split strip format encode decode copy clear insert
+index count sort lower upper replace startswith endswith find run open flush seek tell next send_ put discard setdefault popitem
+group groups match search sub findall start end span""".split())
+
+
 class World:
     def __init__(self, files: dict):
         self.files = files
@@ -12,6 +17,8 @@ class World:
         self.modules = {f.module: f for f in files.values()}
         self.by_path = files
         self.partials = {f"{fi.module}.{n}": (fi, fe, kw) for fi in files.values() for n, (fe, kw) in fi.partials.items()}
+        self.dict_reg = {}
+        self.unresolved = []     # (caller_qname, 'recv.method') where the receiver's type is unknown
         self.file_of = {fn["qname"]: files[fn["file"]] for fn in self.funcs.values() if fn["file"] in files}
         for q, c in self.classes.items():
             fi = files.get(c["file"])
@@ -86,6 +93,9 @@ class World:
         parts = dotted.split(".")
         first = parts[0]
         cq = caller["qname"].rsplit(".", 1)[0] if caller and caller.get("cls") else None
+        if first.endswith("()") and first != "super()" and len(parts) >= 2:      # Cls().method
+            r0 = self.resolve_in(fi, first[:-2], caller, depth + 1)
+            return self.walk(r0, parts[1:]) if r0 and r0[0] == "class" else None
         if first in ("self", "cls") and cq and len(parts) >= 2:
             m = self.find_method(cq, parts[1])
             return ("func", m) if m else None
@@ -94,6 +104,14 @@ class World:
                 m = self.find_method(b, parts[1])
                 if m:
                     return ("func", m)
+            # mixin: super() continues along the MRO of a SUBCLASS, so look at the subclasses' other bases
+            for sub, c in self.classes.items():
+                if cq in c["resolved"]:
+                    for b in c["resolved"]:
+                        if b != cq:
+                            m = self.find_method(b, parts[1])
+                            if m:
+                                return ("func", m)
             return None
         if caller and first in caller.get("vartypes", {}) and len(parts) >= 2:
             t = self.type_of(fi, caller["vartypes"][first], depth + 1)
@@ -130,6 +148,9 @@ class World:
                 caller = self.funcs.get(caller_q)
                 r = self.resolve_in(fi, expr, caller)
                 if not r:
+                    parts = expr.split(".")
+                    if len(parts) >= 2 and not parts[-1].startswith("__") and parts[-1] not in COMMON and (parts[0] not in fi.symbols or parts[0] in ("self", "cls")):
+                        self.unresolved.append((caller_q, parts[-1]))
                     continue
                 kind, q = r
                 if kind == "class":                      # constructor call -> __init__
@@ -263,3 +284,61 @@ class World:
             else:
                 break
         return None
+
+    # ---- handler tables (template engines, plugin registries): a function that reads the table can reach every handler in it
+    def dict_edges(self):
+        if not self.dict_reg:
+            for fi in self.files.values():
+                for name, exprs in fi.dicts.items():
+                    hs = []
+                    for e in exprs:
+                        r = self.resolve_in(fi, e)
+                        if r and r[0] == "func":
+                            hs.append(r[1])
+                    if hs:
+                        self.dict_reg[f"{fi.module}.{name}"] = hs
+        out = {}
+        if not self.dict_reg:
+            return out
+        for fi in self.files.values():
+            for fn in [f for f in self.funcs.values() if f["file"] == fi.path]:
+                for nm in fn.get("names", []):
+                    dq = None
+                    if nm in fi.dicts and f"{fi.module}.{nm}" in self.dict_reg:
+                        dq = f"{fi.module}.{nm}"
+                    elif nm in fi.symbols:
+                        base, attr = fi.symbols[nm]
+                        q = f"{base}.{attr}" if attr else base
+                        for _ in range(5):
+                            if q in self.dict_reg:
+                                dq = q
+                                break
+                            m, _, n = q.rpartition(".")
+                            if m in self.modules and n in self.modules[m].symbols:
+                                b, a = self.modules[m].symbols[n]
+                                q = f"{b}.{a}" if a else b
+                            else:
+                                break
+                    if dq:
+                        for h in self.dict_reg[dq]:
+                            if h != fn["qname"]:
+                                out[(fn["qname"], h)] = f"registry-dict:{dq.split('.')[-1]}"
+        return out
+
+    def maybe_calls(self, deps: dict):
+        """Calls whose receiver type is unknown (`adapter = self.get_adapter(url); adapter.send(...)`): link the call site to every
+        method with that name defined in the caller's own package or one of its direct dependencies (class-hierarchy style
+        over-approximation, capped). Reported as MAYBE_CALLS, never as CALLS: a path through them is only a *possible* path."""
+        by_name = {}
+        for q, fn in self.funcs.items():
+            if fn.get("cls"):
+                by_name.setdefault(fn["name"], []).append(q)
+        svc = {q: self.file_of[q].service for q in self.funcs if q in self.file_of}
+        out = {}
+        for caller, meth in self.unresolved:
+            allowed = {svc.get(caller)} | set(deps.get(svc.get(caller), ()))
+            cands = [c for c in by_name.get(meth, []) if svc.get(c) in allowed and c != caller]
+            if 0 < len(cands) <= 8:
+                for c in cands:
+                    out[(caller, c)] = f"maybe:{meth}"
+        return out

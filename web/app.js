@@ -8,10 +8,10 @@ const SCENARIOS = [
   { id: 'trace', graph: 'otel', label: 'Incident mode: 2 AM stack trace', sub: 'v1 engine on OpenTelemetry-Python: failing function, blame-attributed cause, who to page', replay: 'scenario3',
     input: '' },
 ];
-const S = { maxPR: 1, graph: 'otel', nodes: new Map(), links: new Map(), paths: {}, claims: [], active: null, lens: 'label', depth: new Map(), base: new Map(),
+const S = { maxPR: 1, graph: null, nodes: new Map(), links: new Map(), paths: {}, claims: [], active: null, lens: 'label', depth: new Map(), base: new Map(),
   q: { n: 0, ms: 0, list: [] }, es: null, pendingGroup: null, lit: new Map(), litLinks: new Map(), recalled: new Set(), replay: null, lastInput: null };
 const KIND = { code: { impact: 'Impact', cause: 'Likely cause', page: 'Who to page', similar: 'Similar incident', critical: 'Single point of failure', memory: 'Memory' },
-  supply: { impact: 'Triage', cause: 'Reachable', page: 'Owner', similar: 'No path found', critical: 'Fix', memory: 'Memory' } };
+  supply: { impact: 'Triage', cause: 'Reachable', page: 'Owner', similar: 'No path found', critical: 'Fix', memory: 'Memory', possible: 'Possible path' } };
 const kindLabel = (k) => (KIND[S.graph?.startsWith('sc_') ? 'supply' : 'code'][k] || k);
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -135,7 +135,7 @@ async function loadMeta() {
   try {
     const repos = await (await fetch('/api/repos')).json();
     S.repos = repos; $('repo').innerHTML = repos.map((r) => `<option value="${esc(r.graph)}"${r.graph === S.graph ? ' selected' : ''}>${esc(r.title || r.graph)} (${r.nodes.toLocaleString()} nodes)</option>`).join('');
-    if (!repos.find((r) => r.graph === S.graph) && repos[0]) { S.graph = repos[0].graph; }
+    if (!repos.find((r) => r.graph === S.graph) && repos[0]) { S.graph = (repos.find((r) => r.graph === 'sc_httpie') || repos[0]).graph; $('repo').value = S.graph; }
     const st = await (await fetch(`/api/graph/${S.graph}/stats`)).json();
     const nn = Object.values(st.nodes).reduce((a, b) => a + b, 0), ee = Object.values(st.edges).reduce((a, b) => a + b, 0);
     $('heroStat').textContent = `${nn.toLocaleString()} nodes · ${ee.toLocaleString()} edges · ${Object.keys(st.nodes).length} labels · FalkorDB`;
@@ -272,14 +272,14 @@ function renderTriage(x, box) {
   box.insertAdjacentHTML('beforeend', `<div class="tri"><div class="trih"><b>${t}</b> advisories match the pinned versions <small>(what a package-name scanner reports, ${x.scanner.high_or_critical} high/critical)</small></div>
     <div class="bar3"><i class="r" style="width:${pct(c.reachable)}" title="reachable"></i><i class="n" style="width:${pct(c.no_path_found)}" title="no path found"></i><i class="u" style="width:${pct(c.unknown)}" title="unknown"></i></div>
     <div class="trik"><span><i class="r"></i><b>${c.reachable}</b> reachable</span><span><i class="n"></i><b>${c.no_path_found}</b> no path found</span><span><i class="u"></i><b>${c.unknown}</b> unknown</span></div>
-    <small>"No path found" means none within the analyzed static scope; it is never claimed as "not exploitable". "Unknown" means the vulnerable function could not be identified.</small></div>`);
+    <small>"No path found" means none within the analyzed static scope; it is never claimed as "not exploitable". "Unknown" means the vulnerable function was not identified, or only a possible path through unresolved dynamic dispatch exists.</small></div>`);
 }
 function renderAdvisories(x, box, V) {
   box.insertAdjacentHTML('beforeend', sect('All advisories', 'click a row to see its path'));
   const lab = { reachable: 'REACHABLE', no_path_found: 'NO PATH', unknown: 'UNKNOWN' };
   x.findings.forEach((f) => {
     const b = document.createElement('button'); b.className = `adv ${f.verdict}`; b.setAttribute('aria-pressed', 'false');
-    b.innerHTML = `<span class="vd">${lab[f.verdict]}</span><span class="av"><b>${esc(f.id)}</b> ${esc(f.package)} ${esc(f.version)} <small>${esc(f.severity)}${f.cvss ? ' ' + f.cvss : ''}${f.function ? ' · ' + esc(f.function) : ''}${f.hops ? ' · ' + f.hops + ' hops' : ''}${f.fixed?.length ? ' · fixed in ' + esc(f.fixed[0]) : ''}</small></span>`;
+    b.innerHTML = `<span class="vd">${f.reason ? 'POSSIBLE' : lab[f.verdict]}</span><span class="av"><b>${esc(f.id)}</b> ${esc(f.package)} ${esc(f.version)} <small>${esc(f.severity)}${f.cvss ? ' ' + f.cvss : ''}${f.function ? ' · ' + esc(f.function) : ''}${f.hops ? ' · ' + f.hops + ' hops' : ''}${f.fixed?.length ? ' · fixed in ' + esc(f.fixed[0]) : ''}</small></span>`;
     b.onclick = () => f.path_id && focusPaths([f.path_id], [], b); box.appendChild(b);
   });
   const ck = x.checks || {};

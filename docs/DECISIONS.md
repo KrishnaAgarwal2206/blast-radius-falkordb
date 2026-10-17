@@ -44,3 +44,12 @@
 - Gate result: 5/5. (1) OSV advisories + fixed versions; (2) vulnerable function inferred from the fix commit's changed functions (25/50 httpie advisories, 5/9 pre-commit); (3) real entry->vuln paths (httpie `core.main -> program -> collect_messages -> Session.send -> rebuild_proxies`); (4) upgrade planner (below); (5) graph changes the verdict: PyYAML 5.3.1 CVE-2020-14343 is reachable in a FullLoader app and has no path in pre-commit (SafeLoader), proven with a positive control.
 - Three verdicts only: reachable / no path found within analyzed scope / unknown. "No path" is never "not exploitable".
 - Static analysis limits are disclosed: dynamic dispatch not followed except class-valued parameters, functools.partial, and handlers registered on classes (call-site sensitive).
+
+## D15. Call-site-sensitive type flow instead of a plain call graph
+- Alternatives: package-level reachability (import = reachable); context-insensitive edges from the callee. Why: PyYAML's critical CVE is only reachable if the *caller* passes an unsafe loader, so edges go caller -> target, binding class-valued parameters, `functools.partial`, handlers registered on classes and handler tables. Unresolved calls stay unresolved (never guessed). A positive-control app and a synthetic-library unit test guard against the analysis going blind.
+
+## D16. Verdict vocabulary: reachable / no path found within analyzed scope / unknown (PM requirement)
+- "No path found" is never presented as "not exploitable"; the UI, claims and VEX-style draft say so explicitly. The vulnerable function is inferred from the advisory's fix commit (functions changed, or handlers a module-level change de-registered) and labelled as an inference.
+
+## D17. Upgrade plan = deterministic, explainable ranking, not a min-cut
+- The planner picks, per package, the lowest installable version >= the fix that satisfies every dependent's specifier recorded in the graph (re-evaluated after upgrades), whose own requirements hold for the other pins, and whose advisories are re-queried from OSV. Smoke checks run in a throw-away venv and are reported separately from the "fixed" claim (a plan that passes checks is not claimed to be tested by the app's full suite).

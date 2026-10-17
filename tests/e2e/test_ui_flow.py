@@ -36,6 +36,7 @@ def test_demo_scenario_end_to_end():
         page.wait_for_timeout(3500)
         page.screenshot(path=str(SHOTS / "2-answer.png"))
         assert page.locator(".claim").count() >= 3
+        assert page.locator(".adv").count() >= 10 and page.locator(".bdg.ok").count() >= 3
         assert int(page.inner_text("#tQ")) > 5
         page.click(".claim >> nth=1")
         page.wait_for_timeout(900)

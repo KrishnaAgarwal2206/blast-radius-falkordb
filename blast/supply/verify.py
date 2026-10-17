@@ -21,6 +21,10 @@ CHECKS = {
         ("pre-commit --version", ["-m", "pre_commit", "--version"]),
         ("validate a config file (YAML load path)", ["-m", "pre_commit", "validate-config", "{tmp}/.pre-commit-config.yaml"]),
     ],
+    "cookiecutter": [
+        ("cookiecutter --version", ["-m", "cookiecutter", "--version"]),
+        ("render a template (Jinja2 + click + file generation)", ["-m", "cookiecutter", "{tmp}/tpl", "--no-input", "-o", "{tmp}/out"]),
+    ],
     "yamlfull": [
         ("load a settings file", ["-c", "from yamlfull.config import load_settings; print(load_settings('{tmp}/s.yaml'))"]),
     ],
@@ -50,6 +54,9 @@ def run_checks(app: str, pins: dict, upgrades: dict, label: str, log=print) -> d
         tmp.mkdir()
         (tmp / ".pre-commit-config.yaml").write_text("repos: []\n")
         (tmp / "s.yaml").write_text("debug: true\nport: 8080\n")
+        (tmp / "tpl" / "{{cookiecutter.name}}").mkdir(parents=True)
+        (tmp / "tpl" / "cookiecutter.json").write_text('{"name": "demo", "greeting": "hello"}')
+        (tmp / "tpl" / "{{cookiecutter.name}}" / "README.md").write_text("{{ cookiecutter.greeting|upper }} from {{ cookiecutter.name|title }}\n")
         env = {"PYTHONPATH": spec["repo"], "PATH": str(py.parent), "SYSTEMROOT": "C:\\Windows", "HOME": str(tmp), "USERPROFILE": str(tmp)}
         for title, argv in CHECKS[app]:
             argv = [a.replace("{tmp}", tmp.as_posix()) for a in argv]

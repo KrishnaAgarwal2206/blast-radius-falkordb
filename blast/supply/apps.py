@@ -13,6 +13,11 @@ APPS = {
         pins=str(config.ROOT / "data" / "apps" / "precommit.pins.txt"),
         requires={"cfgv": ">=2.0.0", "identify": ">=1.0.0", "nodeenv": ">=0.11.1", "pyyaml": ">=5.1", "toml": "", "virtualenv": ">=20.0.8"},
         entries=["pre_commit.main.main", "pre_commit.clientlib.validate_config_main", "pre_commit.clientlib.validate_manifest_main"]),
+    "cookiecutter": dict(
+        title="cookiecutter 1.7.3", git="https://github.com/cookiecutter/cookiecutter", tag="1.7.3", repo=str(config.ROOT / "data" / "apps" / "cookiecutter"), pkg_dirs=["cookiecutter"],
+        pins=str(config.ROOT / "data" / "apps" / "cookiecutter.pins.txt"),
+        requires={"binaryornot": ">=0.4.4", "jinja2": ">=2.7,<4.0.0", "click": ">=7.0", "poyo": ">=0.5.0", "jinja2-time": ">=0.2.0", "python-slugify": ">=4.0.0", "requests": ">=2.23.0", "six": ">=1.10"},
+        entries=["cookiecutter.cli.main", "cookiecutter.main.cookiecutter"]),
     "yamlfull": dict(
         title="yamlfull (positive control)", repo=str(config.ROOT / "data" / "apps" / "yamlfull"), pkg_dirs=["yamlfull"],
         pins=str(config.ROOT / "data" / "apps" / "yamlfull.pins.txt"), requires={"pyyaml": ">=5.1"},

@@ -13,10 +13,10 @@ services:
       - FALKORDB_HOST=falkordb
     volumes: ["./data:/app/data"]
     depends_on: [falkordb]
-  ingest:           # one-shot: docker compose run --rm ingest
+  ingest:           # one-shot: docker compose run --rm ingest   (needs network: PyPI wheels, OSV, GitHub fix diffs)
     build: .
     profiles: ["tools"]
-    command: ["python", "-m", "blast.ingest.cli", "https://github.com/open-telemetry/opentelemetry-python", "--graph", "otel", "--ref", "2fa016b27d9b817aee88ea58be1bd0bc10fd2a40"]
+    command: ["sh", "-c", "for a in yamlfull precommit cookiecutter httpie; do python -m blast.supply.pipeline $$a --no-checks; done"]
     environment: [FALKORDB_HOST=falkordb]
     volumes: ["./data:/app/data"]
     depends_on: [falkordb]

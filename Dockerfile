@@ -6,6 +6,9 @@ RUN pip install --no-cache-dir -r requirements.txt -c requirements.lock
 COPY blast ./blast
 COPY web ./web
 COPY data/replays ./data/replays
+COPY data/supply ./data/supply
+COPY data/apps/yamlfull ./data/apps/yamlfull
+COPY data/apps/*.pins.txt ./data/apps/
 ENV PYTHONUNBUFFERED=1 FALKORDB_HOST=falkordb
 EXPOSE 8000
 CMD ["uvicorn", "blast.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

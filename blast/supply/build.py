@@ -69,9 +69,15 @@ def build(app: str, log=print, fresh=True):
     world = World(files)
     calls = world.calls()
     disp = world.dispatch_edges()
+    disp.update(world.dict_edges())
     for k, v in disp.items():
         calls.setdefault(k, v)
-    log(f"resolved {len(calls)} CALLS edges ({len(disp)} via class-valued parameters) over {len(world.funcs)} functions ({time.perf_counter() - t0:.1f}s)")
+    log(f"resolved {len(calls)} CALLS edges ({len(disp)} via type-flow / registries) over {len(world.funcs)} functions ({time.perf_counter() - t0:.1f}s)")
+    deps_by = {app: {n for n in spec["requires"] if n in pins}}
+    for n, m in metas.items():
+        deps_by[n] = {r for r in m["requires"] if r in pins}
+    maybe = {k: v for k, v in world.maybe_calls(deps_by).items() if k not in calls}
+    log(f"{len(maybe)} MAYBE_CALLS candidates from {len(world.unresolved)} unresolved dynamic call sites")
     # entry points: declared + route-like decorators in app code
     entry = set(q for q in spec["entries"] if q in world.funcs)
     for q, fn in world.funcs.items():
@@ -90,6 +96,8 @@ def build(app: str, log=print, fresh=True):
             [dict(a=q, b=b) for q, c in world.classes.items() for b in c["resolved"]])
     batched(g, "UNWIND $rows AS r MATCH (a:Function {qname:r.a}) MATCH (b:Function {qname:r.b}) MERGE (a)-[e:CALLS]->(b) SET e.how=r.how",
             [dict(a=a, b=b, how=h) for (a, b), h in calls.items()])
+    batched(g, "UNWIND $rows AS r MATCH (a:Function {qname:r.a}) MATCH (b:Function {qname:r.b}) MERGE (a)-[e:MAYBE_CALLS]->(b) SET e.how=r.how",
+            [dict(a=a, b=b, how=h) for (a, b), h in maybe.items()])
     deps = [dict(a=app, b=n, spec=spec["requires"].get(n, "")) for n in spec["requires"] if n in pins]
     for n, m in metas.items():
         deps += [dict(a=n, b=r, spec=s) for r, s in m["requires"].items() if r in pins]

@@ -12,3 +12,4 @@ tests/e2e/shots/
 data/envs/
 data/apps/httpie/
 data/apps/precommit/
+data/apps/cookiecutter/

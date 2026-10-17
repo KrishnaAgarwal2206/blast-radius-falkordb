@@ -9,3 +9,6 @@ data/repos/
 data/replay/
 data/spend_ledger.json
 tests/e2e/shots/
+data/envs/
+data/apps/httpie/
+data/apps/precommit/

@@ -101,7 +101,7 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
             [dict(path=f.path, service=f.service, module=f.module, loc=f.loc) for f in files.values()])
     batched(graph, "UNWIND $rows AS r MATCH (f:File {path:r.file}) MERGE (c:Class {qname:r.qname}) "
                    "SET c.file=r.file MERGE (f)-[:DEFINES]->(c)",
-            [dict(qname=q, file=fp) for f in files.values() for q, fp in f.classes])
+            [dict(qname=q, file=fp) for f in files.values() for q, fp, _b in f.classes])
     batched(graph, "UNWIND $rows AS r MATCH (f:File {path:r.file}) MERGE (n:Function {qname:r.qname}) "
                    "SET n.name=r.name, n.file=r.file, n.start=r.start, n.end=r.end MERGE (f)-[:DEFINES]->(n)",
             [dict(qname=x["qname"], name=x["name"], file=x["file"], start=x["start"], end=x["end"])

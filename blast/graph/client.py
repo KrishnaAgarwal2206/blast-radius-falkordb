@@ -12,7 +12,7 @@ _db = None
 def db() -> FalkorDB:
     global _db
     if _db is None:
-        _db = FalkorDB(host=config.FALKORDB_HOST, port=config.FALKORDB_PORT, password=config.FALKORDB_PASSWORD)
+        _db = FalkorDB(host=config.FALKORDB_HOST, port=config.FALKORDB_PORT, username=config.FALKORDB_USERNAME, password=config.FALKORDB_PASSWORD)
     return _db
 
 

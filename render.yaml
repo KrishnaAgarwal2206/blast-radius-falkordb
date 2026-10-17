@@ -10,6 +10,8 @@ services:
         sync: false
       - key: FALKORDB_PORT
         sync: false
+      - key: FALKORDB_USERNAME
+        value: falkordb
       - key: FALKORDB_PASSWORD
         sync: false
       - key: ANTHROPIC_API_KEY    # optional: only for the LLM-agent toggle

@@ -128,8 +128,9 @@ class Run:
         actions = []
         for a in answer.get("actions", []):
             pids = [p for p in a.get("path_ids", []) if p in self.paths]
-            if pids and self.supported(a["title"] + " " + a.get("detail", "") + " " + a.get("command", ""), pids):
-                actions.append(dict(a, path_ids=pids, id=f"a{len(actions) + 1}", verified=True))
+            nids = [n for n in a.get("node_ids", []) if n in self.nodes]
+            if (pids or nids) and self.supported(a["title"] + " " + a.get("detail", "") + " " + a.get("command", ""), pids, nids):
+                actions.append(dict(a, path_ids=pids, node_ids=nids, id=f"a{len(actions) + 1}", verified=True))
             else:
                 dropped += 1
         steps = [dict(st, verified=all(p in self.paths for p in st["path_ids"])) for st in self.steps]

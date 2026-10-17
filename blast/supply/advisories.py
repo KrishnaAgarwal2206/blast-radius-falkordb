@@ -12,7 +12,7 @@ from ..graph.client import run
 from . import dists
 from .analysis import cvss3_score, band
 
-CACHE = config.ROOT / "data" / "envs" / "cache"
+CACHE = config.ROOT / "data" / "cache"
 CACHE.mkdir(parents=True, exist_ok=True)
 HUNK = re.compile(r"^@@ [^@]+ @@\s*(.*)$")
 DEF = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)")

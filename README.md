@@ -20,16 +20,16 @@
 * **the FullLoader app: REACHABLE**, `main -> load_settings -> FullConstructor.construct_python_object_new` (2 hops), and plans `PyYAML 5.3.1 -> 6.0` whose smoke check passes;
 * **pre-commit: NO PATH FOUND**, because the graph shows it passes only `SafeLoader`/`CSafeLoader` (via `functools.partial(yaml.load, Loader=...)`), whose class hierarchy never registers the vulnerable handlers. It still shows what it *did* reach in the same file, and does **not** claim "not exploitable".
 
-On **HTTPie 2.6.0** it separates 4 reachable advisories out of 25, plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses** to recommend `urllib3 -> 2.x` because it breaks the app (`ImportError: DEFAULT_CIPHERS`), a result you only get by running the check.
+On **HTTPie 2.6.0** it finds 3 reachable advisories out of 25 (and declares none safe: the other 22 are unknown, 5 of them with a possible path through dynamic dispatch), plans `requests 2.26.0 -> 2.32.4` (clears two reachable CVEs, checks pass) and **refuses** to recommend `urllib3 -> 2.x` because it breaks the app (`ImportError: DEFAULT_CIPHERS`), a result you only get by running the check.
 
 ## Results (real queries, real data)
 
 <!--BENCH-->
 | App (pinned lock) | Scanner alerts | of which high/critical | Reachable | No path found | Unknown | Upgrades planned | Pass smoke checks | Reachable alerts cleared by passing upgrades |
 |---|---|---|---|---|---|---|---|---|
-| HTTPie 2.6.0 | 25 | 11 | 3 | 3 | 19 (5 possible path) | 2 | 1 | 2 |
+| HTTPie 2.6.0 | 25 | 11 | 3 | 0 | 22 (5 possible path) | 2 | 1 | 2 |
 | cookiecutter 1.7.3 | 24 | 8 | 6 | 1 | 17 (7 possible path) | 3 | 3 | 6 |
-| pre-commit 2.9.0 | 9 | 5 | 0 | 5 | 4 (0 possible path) | 0 | 0 | 0 |
+| pre-commit 2.9.0 | 9 | 5 | 0 | 1 | 8 (0 possible path) | 0 | 0 | 0 |
 | yamlfull (positive control) | 1 | 1 | 1 | 0 | 0 (0 possible path) | 1 | 1 | 1 |
 
 Total: 59 alerts, 10 reachable (17%).
@@ -37,7 +37,7 @@ Total: 59 alerts, 10 reachable (17%).
 
 * Alerts come from [OSV.dev](https://osv.dev) for the pinned versions, the same set a package-name scanner reports. Apps are real OSS projects at a real tag with the dependency versions an unrefreshed lock would pin (documented in `data/apps/*.pins.txt`). `yamlfull` is a positive control, not a real project.
 * **"Reachable"** = a call path exists from an entry point to a function that the advisory's **fix commit** changed. That mapping is an inference (OSV does not publish vulnerable functions); it is labelled everywhere. Reachable is **not** the same as exploitable: preconditions (configuration, attacker input) are out of scope.
-* **"No path found"** = no path within the analyzed static scope. It is never reported as "not exploitable". **"Unknown"** = the vulnerable function could not be identified (e.g. a data file, a shell template).
+* **"No path found"** is only issued with positive evidence: a vulnerable function was identified, the app demonstrably reaches *other* code in the same file, and no path (not even through unresolved dispatch) reaches the vulnerable one. It is never reported as "not exploitable". **"Unknown"** = the vulnerable function could not be identified (a data file, a shell template), the analyzed code never reaches the file (subprocess, streaming and plugin boundaries are blind spots), or only a *possible* path exists through unresolved dynamic dispatch.
 * Method, hand-verified verdicts and known failure modes: [`docs/eval/ground-truth.md`](docs/eval/ground-truth.md).
 
 ## Why FalkorDB is essential here

@@ -1,6 +1,7 @@
 """Run the app's smoke checks in a throw-away virtualenv with the proposed upgrades applied.
 These checks show the app still starts and exercises its dependency paths. They do NOT prove the vulnerability is fixed:
 that claim comes from the advisory's fixed-version range (OSV) and is reported separately."""
+import re
 import shutil
 import subprocess
 import sys
@@ -63,7 +64,7 @@ def run_checks(app: str, pins: dict, upgrades: dict, label: str, log=print) -> d
             t1 = time.perf_counter()
             try:
                 p = subprocess.run([str(py), *argv], capture_output=True, text=True, timeout=120, cwd=str(tmp), env=env)
-                ok, tail = p.returncode == 0, ((p.stdout + p.stderr).strip().splitlines() or [""])[-1][:200]
+                ok, tail = p.returncode == 0, re.sub(r"[A-Za-z]:[\\/][^\s'\"]*", "<path>", ((p.stdout + p.stderr).strip().splitlines() or [""])[-1])[:200]
             except subprocess.TimeoutExpired:
                 ok, tail = False, "timed out"
             out["checks"].append(dict(title=title, ok=ok, ms=round((time.perf_counter() - t1) * 1000), tail=tail))

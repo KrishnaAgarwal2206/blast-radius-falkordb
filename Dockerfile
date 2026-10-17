@@ -7,6 +7,7 @@ COPY blast ./blast
 COPY web ./web
 COPY data/replays ./data/replays
 COPY data/supply ./data/supply
+COPY data/cache ./data/cache
 COPY data/apps/yamlfull ./data/apps/yamlfull
 COPY data/apps/*.pins.txt ./data/apps/
 ENV PYTHONUNBUFFERED=1 FALKORDB_HOST=falkordb

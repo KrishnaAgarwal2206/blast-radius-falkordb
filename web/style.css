@@ -104,3 +104,8 @@ h4.sec{margin:18px 0 6px;font-size:11px;letter-spacing:.08em;text-transform:uppe
 .adv small{color:var(--dim)}
 .chk2{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--surface-2)}.chk2 .cl{font-size:13px;margin-top:3px}.chk2 .cl.ok{color:var(--ok)}.chk2 .cl.bad{color:var(--err)}.chk2 small{display:block;color:var(--dim);overflow-wrap:anywhere}
 small.dim{color:var(--dim)}
+
+#modalP{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:20}#modalP[hidden]{display:none}
+#portfolioBody{max-height:60vh;overflow:auto}.pf{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--surface-2)}.pf.differs{border-color:var(--path)}
+.adv-chip{display:inline-block;font:11px var(--mono);padding:2px 8px;border-radius:99px;margin:4px 6px 0 0;border:1px solid var(--line)}
+.adv-chip.reachable{color:#FF8A7A;border-color:#7a2a22}.adv-chip.no_path_found{color:#7fc4f0;border-color:#27506b}.adv-chip.unknown{color:var(--dim)}

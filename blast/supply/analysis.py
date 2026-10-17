@@ -85,6 +85,9 @@ def verdicts(graph: str) -> Result:
             if r.rows:
                 item["sibling_path_id"] = res.add_path(r.rows[0][1], r.rows[0][2], pid=f"nopath{len(out) + 1}")
                 item["sibling"] = r.rows[0][1][-1][1]
+            else:   # the analyzed code never reaches this file at all: that is a blind spot (subprocess, streaming, plugin), not evidence of absence
+                item["verdict"] = "unknown"
+                item["reason"] = "not_reached"
             res.edges.append((vuid, "VULNERABLE_IN", uid("Function", fns[0])))
             res.nodes.setdefault(uid("Function", fns[0]), dict(label="Function", key=fns[0], name=fns[0]))
         else:

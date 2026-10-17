@@ -62,6 +62,18 @@ def repos():
     return sorted(out, key=lambda x: (x["kind"] != "supply", x["graph"]))
 
 
+@app.get("/api/portfolio")
+def portfolio():
+    """Advisories that appear in more than one app, with each app's verdict: one query over the shared sc_memory graph."""
+    try:
+        r = run("sc_memory", "MATCH (d:Decision)-[:ABOUT]->(v:Vulnerability) WITH v, collect({app:d.app, verdict:d.verdict, version:d.version}) AS apps "
+                             "WHERE size(apps) > 1 RETURN v.id, v.package, v.severity, apps ORDER BY size(apps) DESC, v.id")
+    except Exception:
+        return {"rows": [], "cypher": None}
+    rows = [dict(id=a, package=b, severity=c, apps=d, differs=len({x["verdict"] for x in d}) > 1) for a, b, c, d in r.rows]
+    return {"rows": rows, "ms": r.ms, "cypher": r.cypher}
+
+
 @app.get("/api/supply/{app_name}")
 def supply_summary(app_name: str):
     """Precomputed supply-chain snapshot: scanner view vs graph view, remediation plan and smoke-check results."""

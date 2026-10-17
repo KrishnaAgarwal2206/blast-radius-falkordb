@@ -91,11 +91,13 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
         return None, rejected, len(cons), floor
 
     pending = dict(by_pkg)
+    blocked_once = set()
     for _pass in range(3):          # a blocked package is retried after the packages that constrain it have been upgraded
         progress = False
         for pkg, fs in list(pending.items()):
             chosen, rejected, ncons, floor = try_choose(pkg, fs)
             if not chosen:
+                blocked_once.add(pkg)
                 cands[pkg] = dict(package=pkg, from_version=pins[pkg], to_version=None, blocked=rejected[:3], findings=[f["id"] for f in fs])
                 continue
             cur = _ver(pins[pkg])
@@ -107,7 +109,7 @@ def plan(graph: str, findings: list[dict], pins: dict, scope=("reachable",)) -> 
                               cleared_all=[f["id"] for f in findings if f["package"] == pkg and f["id"] not in remaining],
                               remaining=sorted(remaining), constraints_checked=ncons, skipped=rejected[:3],
                               findings=[f["id"] for f in fs], path_ids=[f["path_id"] for f in fs if f.get("path_id")],
-                              unblocked_by=[k for k in upgrades if k != pkg and pkg in [d for d, _ in [(k, 0)]]] if _pass else [])
+                              unblocked_by=[k for k in upgrades if k != pkg] if pkg in blocked_once else [])
             del pending[pkg]
             progress = True
         if not progress or not pending:

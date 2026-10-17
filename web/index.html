@@ -19,6 +19,7 @@
     <button data-lens="community" title="FalkorDB algo.labelPropagation (4)">Community</button>
   </div>
   <button id="btnSchema" class="ghost">Schema</button>
+  <button id="btnPortfolio" class="ghost" title="Advisories that appear in several apps, and their verdicts">Portfolio</button>
   <div id="totals" class="totals" title="FalkorDB time only; LLM time excluded">
     <span>Queries <b id="tQ">0</b></span><span>Total <b id="tMs">0</b> ms</span><span>p95 <b id="tP95">–</b> ms</span><span>Nodes <b id="tN">0</b></span>
   </div>
@@ -70,6 +71,7 @@
   <div id="memBody" hidden></div>
 </footer>
 
+<div id="modalP" hidden><div class="mbox"><button id="pClose" class="ghost">Close</button><h3>Portfolio: the same advisory across apps</h3><div id="portfolioBody"></div></div></div>
 <div id="modal" hidden><div class="mbox"><button id="mClose" class="ghost">Close</button><h3>Graph schema (live from FalkorDB)</h3><div id="schemaGraph"></div></div></div>
 <script type="module" src="/static/app.js"></script>
 </body>

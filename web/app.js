@@ -279,7 +279,7 @@ function renderAdvisories(x, box, V) {
   const lab = { reachable: 'REACHABLE', no_path_found: 'NO PATH', unknown: 'UNKNOWN' };
   x.findings.forEach((f) => {
     const b = document.createElement('button'); b.className = `adv ${f.verdict}`; b.setAttribute('aria-pressed', 'false');
-    b.innerHTML = `<span class="vd">${f.reason ? 'POSSIBLE' : lab[f.verdict]}</span><span class="av"><b>${esc(f.id)}</b> ${esc(f.package)} ${esc(f.version)} <small>${esc(f.severity)}${f.cvss ? ' ' + f.cvss : ''}${f.function ? ' · ' + esc(f.function) : ''}${f.hops ? ' · ' + f.hops + ' hops' : ''}${f.fixed?.length ? ' · fixed in ' + esc(f.fixed[0]) : ''}</small></span>`;
+    b.innerHTML = `<span class="vd">${f.reason === 'possible_via_dynamic_dispatch' ? 'POSSIBLE' : lab[f.verdict]}</span><span class="av"><b>${esc(f.id)}</b> ${esc(f.package)} ${esc(f.version)} <small>${esc(f.severity)}${f.cvss ? ' ' + f.cvss : ''}${f.function ? ' · ' + esc(f.function) : ''}${f.hops ? ' · ' + f.hops + ' hops' : ''}${f.fixed?.length ? ' · fixed in ' + esc(f.fixed[0]) : ''}</small></span>`;
     b.onclick = () => f.path_id && focusPaths([f.path_id], [], b); box.appendChild(b);
   });
   const ck = x.checks || {};
@@ -362,7 +362,8 @@ function setLens(l) { S.lens = l; S.active = null; document.querySelectorAll('[a
 document.querySelectorAll('#lens button').forEach((b) => (b.onclick = () => setLens(b.dataset.lens)));
 function legend() {
   const L = $('legend');
-  if (S.lens === 'label') L.innerHTML = Object.entries(PALETTE).map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('');
+  const SUPPLY = ['Service', 'Class', 'Function', 'Vulnerability', 'Decision'];
+  if (S.lens === 'label') L.innerHTML = Object.entries(PALETTE).filter(([k]) => !S.graph?.startsWith('sc_') || SUPPLY.includes(k)).map(([k, c]) => `<span><i style="background:${c}"></i>${k}</span>`).join('');
   else if (S.lens === 'pagerank') L.innerHTML = '<span>Services colored/sized by FalkorDB algo.pageRank over DEPENDS_ON (bright = many things depend on it)</span>';
   else if (S.lens === 'depth') L.innerHTML = DEPTH_COL.map((c, i) => `<span><i style="background:${c}"></i>${i === 0 ? 'failing node' : i === 3 ? '3+ hops' : i + ' hop'}</span>`).join('') + '<span>(from the blast_radius paths of this run)</span>';
   else L.innerHTML = '<span>Services colored by FalkorDB algo.labelPropagation community</span>';
@@ -374,7 +375,8 @@ let sg;
 $('btnSchema').onclick = async () => {
   $('modal').hidden = false;
   const s = await (await fetch(`/api/graph/${S.graph}/schema`)).json(); const mx = Math.max(...Object.values(s.labels));
-  const nodes = Object.entries(s.labels).map(([id, n]) => ({ id, n })), links = s.patterns.map((p) => ({ source: p.a, target: p.b, type: p.type, n: p.n }));
+  const live = new Set(Object.entries(s.labels).filter(([, n]) => n > 0).map(([k]) => k));
+  const nodes = Object.entries(s.labels).filter(([, n]) => n > 0).map(([id, n]) => ({ id, n })), links = s.patterns.filter((p) => live.has(p.a) && live.has(p.b)).map((p) => ({ source: p.a, target: p.b, type: p.type, n: p.n }));
   sg ||= ForceGraph()($('schemaGraph')).backgroundColor('#111622');
   sg.width($('schemaGraph').clientWidth).height(430).nodeId('id').nodeRelSize(1).linkCurvature((l) => (l.source === l.target || l.source.id === l.target.id ? 0.7 : 0.15))
     .nodeCanvasObject((n, ctx, k) => { const r = 5 + 10 * Math.sqrt(n.n / mx); shape(ctx, n.id, n.x, n.y, r); ctx.fillStyle = PALETTE[n.id]; ctx.fill(); ctx.font = `${11 / k}px Inter`; ctx.fillStyle = '#E8ECF4'; ctx.textAlign = 'center'; ctx.fillText(`${n.id} ${n.n.toLocaleString()}`, n.x, n.y + r + 9 / k); })
@@ -423,3 +425,16 @@ const params = new URLSearchParams(location.search);
   await loadMeta(); await loadOverview();
   if (params.get('replay')) start('', { replay: params.get('replay') });
 })();
+
+// ---------------------------------------------------------------- portfolio (one query over the shared decision graph)
+$('btnPortfolio').onclick = async () => {
+  $('modalP').hidden = false; const body = $('portfolioBody'); body.innerHTML = '<div class="empty">Querying FalkorDB…</div>';
+  try {
+    const r = await (await fetch('/api/portfolio')).json();
+    if (!r.rows.length) { body.innerHTML = '<div class="empty">No advisory appears in more than one app yet. Investigate two apps first.</div>'; return; }
+    const lab = { reachable: 'REACHABLE', no_path_found: 'NO PATH', unknown: 'UNKNOWN' };
+    body.innerHTML = `<small class="dim">${r.rows.length} advisories seen in several apps · ${r.ms.toFixed(2)} ms · <code>${esc(r.cypher.replace(/\s+/g, ' ').slice(0, 150))}…</code></small>` +
+      r.rows.map((x) => `<div class="pf${x.differs ? ' differs' : ''}"><b>${esc(x.id)}</b> ${esc(x.package)} <small>${esc(x.severity)}${x.differs ? ' · verdicts differ across apps' : ''}</small><div>${x.apps.map((a) => `<span class="adv-chip ${a.verdict}">${esc(a.app)} ${esc(a.version)}: ${lab[a.verdict] || a.verdict}</span>`).join('')}</div></div>`).join('');
+  } catch (e) { body.innerHTML = '<div class="err-box">Portfolio unavailable.</div>'; }
+};
+$('pClose').onclick = () => ($('modalP').hidden = true);

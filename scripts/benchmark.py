@@ -16,7 +16,7 @@ for a in APPS:
     plan = [x for x in s["plan"] if x.get("to_version")]
     ok = [x for x in plan if s["checks"].get(x["package"], {}).get("checks") and all(c2["ok"] for c2 in s["checks"][x["package"]]["checks"])]
     cleared = sum(len(x["cleared_in_scope"]) for x in ok)
-    poss = sum(1 for f in s["findings"] if f.get("reason"))
+    poss = sum(1 for f in s["findings"] if f.get("reason") == "possible_via_dynamic_dispatch")
     rows.append((s["title"], s["scanner"]["total"], hc, c["reachable"], c["no_path_found"], f"{c['unknown']} ({poss} possible path)", reach_hc, len(plan), len(ok), cleared))
 
 print("| App (pinned lock) | Scanner alerts | of which high/critical | Reachable | No path found | Unknown | Upgrades planned | Pass smoke checks | Reachable alerts cleared by passing upgrades |")

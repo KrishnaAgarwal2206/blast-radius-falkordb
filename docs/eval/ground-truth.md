@@ -25,7 +25,13 @@ For each app (a real OSS project at a real tag, with the dependency versions an 
 * `Cls().method()` and star imports (`from .loader import *`) were not resolved.
 * A plain call graph says "no path" even for a vulnerable `FullLoader` app, because `yaml.load` instantiates a class passed as a parameter; hence the call-site-sensitive edges and the positive control.
 
+## Found by an independent judge and fixed
+* HTTPie's `urllib3` CVE-2026-97689 (`read_chunked`) was "no path found", but HTTPie streams every response body through `iter_content -> raw.stream -> read_chunked`; those hops are dynamic and the entry point never reached `iter_body`. **Fix:** "no path found" now requires positive evidence (the app reaches other code in the same file); otherwise the verdict is "unknown (not reached)". HTTPie went from 3 "no path" to 0.
+* pre-commit launches `virtualenv` and `nodeenv` as subprocesses (`[sys.executable, '-mvirtualenv', ...]`), which a static call graph cannot follow. The five virtualenv advisories are now "unknown (not reached)" instead of "no path".
+* The generated VEX draft said `not_affected` from a static result. It now says `status: under_investigation`, with `proposed_status: not_affected` and the basis, and states that confirmation is required.
+
 ## Known failure modes
+* **Reachable is function-level, not precondition-level.** cookiecutter's Jinja2 CVE-2025-27516 (`do_attr`) is reported reachable, but the advisory only affects `SandboxedEnvironment` and cookiecutter uses a plain `Environment`; the product does not read advisory preconditions.
 * **Dynamic dispatch beyond the modelled patterns** (getattr-by-name visitors such as Jinja2's compiler `visit_*`, plugin discovery, entry-point groups) is not followed; such cases surface as unknown, or occasionally as "no path found" (see `CVE-2024-56201`, `CodeGenerator.visit_FromImport`, not resolvable statically). **"No path found" is never "not exploitable".**
 * The vulnerable function is *inferred* from the fix commit; a fix may touch code that is not the vulnerable sink. About half of the advisories here (28 of 59) have no usable Python fix diff and are unknown.
 * Entry points are the declared console scripts and public entry functions; plugin or framework hooks are not discovered.

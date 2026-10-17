@@ -34,7 +34,7 @@ OSV tells you the affected version range and the fixed version. It does not tell
 
 ## Three verdicts, never "safe"
 
-*Reachable*, *no path found within the analyzed scope*, *unknown*. When I read the output by hand I found `requests.HTTPAdapter.send` classified "no path found" even though every request goes through it: the adapter is chosen dynamically (`adapter = self.get_adapter(url)`). The fix was structural, not cosmetic: unresolved dynamic call sites now produce `MAYBE_CALLS` edges to same-package and direct-dependency candidates, and a path through them yields **unknown, possible path** instead of a false "no path". The case, and seven others, are in `docs/eval/ground-truth.md`.
+*Reachable*, *no path found within the analyzed scope*, *unknown*. "No path found" needs positive evidence (the app reaches other code in the same file); without it the verdict is unknown. When I read the output by hand I found `requests.HTTPAdapter.send` classified "no path found" even though every request goes through it: the adapter is chosen dynamically (`adapter = self.get_adapter(url)`). The fix was structural, not cosmetic: unresolved dynamic call sites now produce `MAYBE_CALLS` edges to same-package and direct-dependency candidates, and a path through them yields **unknown, possible path** instead of a false "no path". The case, and seven others, are in `docs/eval/ground-truth.md`.
 
 ## Acting, and checking the act
 

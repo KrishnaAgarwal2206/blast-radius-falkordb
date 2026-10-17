@@ -57,7 +57,7 @@ const fg = ForceGraph()($('graph')).backgroundColor('rgba(0,0,0,0)').nodeId('id'
       if (p < 1 && !reduced) { ctx.beginPath(); ctx.arc(n.x, n.y, r * (1 + 1.4 * ease(p)), 0, 7); ctx.strokeStyle = `rgba(255,176,0,${0.8 * (1 - p)})`; ctx.lineWidth = 2 / k; ctx.stroke(); }
     }
     if (n.id === S.seed) { ctx.globalAlpha = 1; ctx.setLineDash([3 / k, 2 / k]); ctx.beginPath(); ctx.arc(n.x, n.y, r + 4, 0, 7); ctx.strokeStyle = '#FF6B4A'; ctx.lineWidth = 1.2 / k; ctx.stroke(); ctx.setLineDash([]); }
-    if (((L && (k > 1.2 || ['Service', 'Commit', 'Person', 'Incident'].includes(n.label))) || k > 2.2 || r > 9 || n === S.hover) && !dim) {
+    if (((L && (k > 1.6 || (n.label === 'Service' ? r > 8 : ['Commit', 'Person', 'Incident'].includes(n.label)))) || k > 2.6 || r > 11 || n === S.hover) && !dim) {
       ctx.globalAlpha = 1; ctx.font = `${11 / k}px Inter, sans-serif`; ctx.fillStyle = '#E8ECF4'; ctx.textBaseline = 'middle';
       ctx.fillText(short(n), n.x + r + 3 / k, n.y); }
     ctx.globalAlpha = 1;

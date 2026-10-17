@@ -28,3 +28,23 @@ def test_bad_input_is_graceful(graph):
     ev = []
     assert loop.investigate(graph, "zzz-nothing-matches-qq", ev.append, use_llm=False) is None
     assert ev[-1]["type"] == "run_finished" and any(e["type"] == "error" for e in ev)
+
+
+def test_answer_has_diagnosis_trail_and_verified_actions(graph):
+    ans = loop.investigate(graph, "svc-a", lambda e: None, use_llm=False, remember=False)
+    assert [s["tool"] for s in ans["diagnosis"]][:2] == ["blast_radius", "suspect_changes"]
+    assert all(s["verified"] and s["queries"] >= 1 for s in ans["diagnosis"])
+    kinds = {a["kind"] for a in ans["actions"]}
+    assert {"page", "inspect", "message"} <= kinds
+    paths = set(ans["evidence_paths"] and [p["path_id"] for p in ans["evidence_paths"]])
+    assert all(a["verified"] and a["path_ids"] for a in ans["actions"])
+    assert any(a.get("command", "").startswith("git show ") for a in ans["actions"])
+
+
+def test_actions_citing_unknown_commits_are_dropped(graph):
+    r = loop.Run(graph, lambda e: None)
+    r.paths = {"p": dict(path_id="p", nodes=["Commit:aaaaaaaa11112222"], rels=[], sentence="s")}
+    out = r.finalize({"summary": "", "claims": [], "actions": [
+        dict(kind="inspect", title="Review commit aaaaaaaa", detail="", command="git show aaaaaaaa", path_ids=["p"]),
+        dict(kind="mitigate", title="Revert deadbeef", detail="", command="git revert deadbeef", path_ids=["p"])]})
+    assert [a["title"] for a in out["actions"]] == ["Review commit aaaaaaaa"] and out["dropped_unverified_claims"] == 1

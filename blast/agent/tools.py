@@ -36,6 +36,8 @@ def dispatch(graph, name, args):
         return core.critical_nodes(graph, args.get("scope", "Service"))
     if name == "explain_path":
         return core.explain_path(graph, args.get("a", ""), args.get("b", ""))
+    if name == "dependent_owners":
+        return core.dependent_owners(graph, args.get("services", []))
     if name == "run_cypher":
         return _cypher_tool(graph, args.get("query", ""))
     if name == "record_incident":
@@ -72,8 +74,11 @@ TOOL_SCHEMAS = [
              "text": {"type": "string"},
              "path_ids": {"type": "array", "items": {"type": "string"}},
              "node_ids": {"type": "array", "items": {"type": "string"}}},
-             "required": ["kind", "text", "path_ids"]}}},
-         "required": ["summary", "claims", "confidence"]}},
+             "required": ["kind", "text", "path_ids"]}},
+         "verification": {"type": "array", "description": "Your independent check of each diagnosis step (s1..) and recommended action (a1..) from the brief: is it supported by the cited path sentences?",
+                          "items": {"type": "object", "properties": {"ref": {"type": "string"}, "verdict": {"type": "string", "enum": ["supported", "weak", "unsupported"]},
+                                                                      "reason": {"type": "string"}}, "required": ["ref", "verdict", "reason"]}}},
+         "required": ["summary", "claims", "confidence", "verification"]}},
 ]
 
 

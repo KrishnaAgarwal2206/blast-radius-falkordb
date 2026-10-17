@@ -16,6 +16,17 @@ from ..memory import store
 from . import tools
 
 # $ per million tokens (Haiku 4.5)
+STEP_TITLES = {
+    "trace_stacktrace": "Parse the stack trace and map each frame to a code node",
+    "blast_radius": "Walk reverse dependencies from the failing node (blast radius)",
+    "suspect_changes": "Rank recent commits that touched the failing code",
+    "who_to_page": "Find owners and authors of the suspect changes",
+    "recall_incidents": "Recall similar past incidents from graph memory",
+    "critical_nodes": "Check single points of failure (PageRank / betweenness)",
+    "dependent_owners": "Find the owners of the impacted services",
+    "explain_path": "Explain the dependency path", "run_cypher": "Ad-hoc read-only graph query",
+    "record_incident": "Write this investigation back to graph memory",
+}
 PRICE = {"in": 1.0, "out": 5.0, "cache_read": 0.10, "cache_write": 1.25}
 MAX_TURNS = 3
 
@@ -44,6 +55,7 @@ class Run:
     cost: float = 0.0
     tokens: dict = field(default_factory=lambda: {"in": 0, "out": 0})
     results: dict = field(default_factory=dict)   # tool name -> last Result (for the deterministic answer)
+    steps: list = field(default_factory=list)     # ordered diagnosis trail
 
     def send(self, type_, **payload):
         self.seq += 1
@@ -82,34 +94,48 @@ class Run:
             self.paths[p["path_id"]] = p
             self.send("path", call_id=call_id, **p)
         self.results[name] = res
+        if name != "record_incident":
+            self.steps.append(dict(id=f"s{len(self.steps) + 1}", tool=name, title=STEP_TITLES.get(name, name), finding=_summary(name, res),
+                                   path_ids=[p["path_id"] for p in res.paths][:12], queries=len(res.queries),
+                                   ms=round(sum(q.ms for q in res.queries), 2)))
         self.send("tool_result", call_id=call_id, tool=name, ms=round((time.perf_counter() - t0) * 1000, 1),
                   summary=_summary(name, res), node_ids=list(res.nodes)[:50], path_ids=[p["path_id"] for p in res.paths])
         return res, tools.compact(res)
 
     # --- verify a model-produced answer against what the graph actually returned
+    def supported(self, text, pids, nids=()):
+        """Every commit sha / incident id named in the text must appear in the cited paths (or cited nodes)."""
+        evidence = " ".join(u for p in pids for u in self.paths[p]["nodes"]) + " " + " ".join(nids)
+        cited = re.findall(r"\b[0-9a-f]{7,40}\b", text) + re.findall(r"\b(?:inc|live)-[0-9a-f]+\b", text)
+        return all(any(x in e for e in evidence.split()) for x in cited)
+
     def finalize(self, answer: dict, emit: bool = True):
         claims, dropped = [], 0
         for c in answer.get("claims", []):
             pids = [p for p in c.get("path_ids", []) if p in self.paths]
             nids = [n for n in c.get("node_ids", []) if n in self.nodes]
-            if not pids:
-                dropped += 1
-                continue
-            # every commit sha / incident id named in the text must appear in the cited paths or nodes
-            evidence = " ".join(u for p in pids for u in self.paths[p]["nodes"]) + " " + " ".join(nids)
-            cited = re.findall(r"\b[0-9a-f]{7,40}\b", c["text"]) + re.findall(r"\b(?:inc|live)-[0-9a-f]+\b", c["text"])
-            if any(x not in evidence and not any(("Commit:" + x) in e or ("Incident:" + x) in e or e.endswith(":" + x) or (":" + x) in e for e in evidence.split()) for x in cited):
+            if not pids or not self.supported(c["text"], pids, nids):
                 dropped += 1
                 continue
             claims.append(dict(kind=c.get("kind", "impact"), text=c["text"], path_ids=pids, node_ids=nids,
                                claim_id=f"c{len(claims) + 1}"))
         for c in (claims if emit else []):
             self.send("claim", **c)
+        actions = []
+        for a in answer.get("actions", []):
+            pids = [p for p in a.get("path_ids", []) if p in self.paths]
+            if pids and self.supported(a["title"] + " " + a.get("detail", "") + " " + a.get("command", ""), pids):
+                actions.append(dict(a, path_ids=pids, id=f"a{len(actions) + 1}", verified=True))
+            else:
+                dropped += 1
+        steps = [dict(st, verified=all(p in self.paths for p in st["path_ids"])) for st in self.steps]
+        ver = {v["ref"]: v for v in answer.get("verification", []) if isinstance(v, dict) and "ref" in v}
         by = lambda k: [c for c in claims if c["kind"] == k]
         out = dict(summary=answer.get("summary", ""), confidence=answer.get("confidence"),
+                   diagnosis=steps, actions=actions, llm_verification=ver,
                    impacted=by("impact"), likely_cause=(by("cause") or [None])[0], page=by("page"),
                    similar_incidents=by("similar"), critical=by("critical"), claims=claims,
-                   evidence_paths=[self.paths[p] for p in dict.fromkeys(p for c in claims for p in c["path_ids"])],
+                   evidence_paths=[self.paths[p] for p in dict.fromkeys(p for c in claims + actions for p in c["path_ids"])],
                    dropped_unverified_claims=dropped)
         return out
 
@@ -132,6 +158,10 @@ def _summary(name, res):
         return ", ".join(p["name"] for p in d.get("page", [])) or "nobody found"
     if name == "recall_incidents":
         return f"{len(d.get('similar', []))} similar past incidents"
+    if name == "critical_nodes":
+        return "Top by PageRank: " + ", ".join(f"{c['uid'].split(':', 1)[1].replace('opentelemetry-', 'otel-')} ({c['pagerank']:.4f}, {c.get('dependents', '?')} dependents)" for c in d.get("critical", [])[:3])
+    if name == "dependent_owners":
+        return "; ".join(f"{o['name']} owns {o['service'].split(':', 1)[1]}" for o in d.get("owners", [])[:3]) or "no owners found"
     return json.dumps(d, default=str)[:160]
 
 
@@ -236,6 +266,8 @@ def pipeline(r: Run, text: str):
     # an incident that IS the suspect fix commit is not independent evidence (circular), so exclude it from recall
     rc, _ = r.call("recall_incidents", {"nodes": seeds, "exclude": [f"inc-{x[:7]}" for x in shas]}, "t5")
     cr, _ = r.call("critical_nodes", {"scope": "Service"}, "t6")
+    imp_svcs = [i["uid"] for i in br.data.get("impacted", []) if i["uid"].startswith("Service:")][:3]
+    do, _ = r.call("dependent_owners", {"services": imp_svcs}, "t7") if imp_svcs else (None, None)
     claims = []
     imp = br.data.get("impacted", [])
     cnt = br.data["counts"]
@@ -264,8 +296,32 @@ def pipeline(r: Run, text: str):
             if o["uid"] == svc and o.get("path_id"):
                 claims.append(dict(kind="critical", text=f"{svc.split(':', 1)[1]} is the #{rank} single point of failure in this repo by PageRank over DEPENDS_ON ({o['dependents']} services depend on it directly; first 3 shown as paths).",
                                    path_ids=o["path_ids"], node_ids=[svc]))
-    interp = "" if target.strip() == text.strip() else f"Interpreted your input as {target if len(target) < 80 else tn}. "
-    ans = dict(summary=f"{interp}{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
+    interp = "" if (is_trace or target.strip() == text.strip()) else f"Interpreted your input as {target if len(target) < 80 else tn}. "
+    actions = []
+    for x in (wp.data["page"][:2] if wp else []):
+        actions.append(dict(kind="page", title=f"Page {x['name']}", detail=x["why"][:220] + (" (may be inactive: no commits in 90+ days)" if x["inactive"] else ""),
+                            path_ids=x["path_ids"], risk="none"))
+    for x in sus[:2]:
+        actions.append(dict(kind="inspect", title=f"Review commit {x['sha'][:8]}", detail=f"\"{x['msg'][:90]}\" - {x['reason']}.",
+                            command=f"git show {x['sha'][:8]} --stat", path_ids=[x["path_id"]], risk="none"))
+    if sus and sus[0]["age_days"] <= 45:
+        x = sus[0]
+        actions.append(dict(kind="mitigate", title=f"Candidate rollback: {x['sha'][:8]}", detail="Draft only - NOT executed. Revert the top suspect on a branch, run the failing path's tests, then decide.",
+                            command=f"git revert {x['sha'][:8]}", path_ids=[x["path_id"]], risk="medium: needs human approval"))
+    for o in (do.data["owners"] if do else []):
+        actions.append(dict(kind="notify", title=f"Notify {o['name']} ({o['service'].split(':', 1)[1]})",
+                            detail="Owner of an impacted dependent service (inferred from commit history).", path_ids=[o["path_id"]], risk="none"))
+    if rc:
+        h = next((x for x in rc.data["similar"] if x["source"] != "live" and x.get("resolved_by")), None)
+        if h:
+            actions.append(dict(kind="compare", title=f"Compare with the earlier fix {h['resolved_by']['sha'][:8]}", detail=f"Past incident {h['id']} touched the same files; its fix may show the intended behaviour.",
+                                command=f"git show {h['resolved_by']['sha'][:8]}", path_ids=[h["resolved_by"]["path_id"]], risk="none"))
+    if imp and sus:
+        top = sus[0]
+        actions.append(dict(kind="message", title="Draft status update (copy/paste)",
+                            detail=f"Investigating: {tn} is failing; {plural(cnt['Service'], 'service')} / {plural(cnt['File'], 'file')} downstream. Top suspect change {top['sha'][:8]} (\"{top['msg'][:60]}\"). Paging {', '.join(x['name'] for x in (wp.data['page'][:2] if wp else [])) or 'owners'}.",
+                            path_ids=[imp[0]["path_id"], top["path_id"]], risk="none"))
+    ans = dict(actions=actions, summary=f"{interp}{tn}: {plural(cnt['Service'], 'service')} and {plural(cnt['File'], 'file')} depend on it; {plural(len(shas), 'recent suspect commit')}; {plural(len(rc.data['similar']) if rc else 0, 'similar past incident')} recalled from graph memory.", confidence=0.6, claims=claims)
     return ans, seeds, shas
 
 
@@ -338,11 +394,15 @@ def _agent(r: Run, text: str, t0, remember):
         return None
     draft, seeds, shas = out
     r.send("draft_answer", answer=r.finalize(draft, emit=False))
-    brief = json.dumps({"draft_claims": [{k: c[k] for k in ("kind", "text", "path_ids")} for c in draft["claims"]],
+    steps = [dict(st, **{}) for st in r.steps]
+    brief = json.dumps({"diagnosis_steps": [{"ref": st["id"], "step": st["title"], "finding": st["finding"], "path_ids": st["path_ids"][:4]} for st in steps],
+                        "recommended_actions": [{"ref": f"a{i + 1}", "title": a["title"], "detail": a["detail"], "command": a.get("command"), "path_ids": a["path_ids"]} for i, a in enumerate(draft["actions"])],
+                        "draft_claims": [{k: c[k] for k in ("kind", "text", "path_ids")} for c in draft["claims"]],
                         "paths": {pid: p["sentence"][:160] for pid, p in r.paths.items()}}, default=str)[:7000]
     msgs = [{"role": "user", "content": f"User input:\n{text[:3000]}\n\nThe deterministic graph tools already ran. Results:\n{brief}\n\n"
              "Review them: fix any claim that looks wrong or irrelevant (e.g. a formatting commit as the cause), call another tool ONLY if a claim is clearly wrong (prefer none), "
-             "then call final_answer with concise claims, each citing path_ids from the results above."}]
+             "then call final_answer with concise claims (each citing path_ids from the results above) AND a `verification` entry for every diagnosis step (s1..) and every recommended action (a1..): "
+             "verdict supported/weak/unsupported plus a reason of at most 12 words, judged ONLY from the cited path sentences."}]
     sys_blocks = [{"type": "text", "text": SYSTEM, "cache_control": {"type": "ephemeral"}}]
     schemas = [dict(t) for t in tools.TOOL_SCHEMAS]
     schemas[-1]["cache_control"] = {"type": "ephemeral"}
@@ -351,7 +411,7 @@ def _agent(r: Run, text: str, t0, remember):
         if spent() + r.cost >= config.SPEND_LIMIT_USD:
             r.send("error", message="spend limit reached", recoverable=False)
             break
-        with client.messages.stream(model=config.AGENT_MODEL, max_tokens=1500, system=sys_blocks, tools=schemas, messages=msgs) as st:
+        with client.messages.stream(model=config.AGENT_MODEL, max_tokens=3000, system=sys_blocks, tools=schemas, messages=msgs) as st:
             for ev in st:
                 if ev.type == "content_block_delta" and getattr(ev.delta, "type", "") == "text_delta":
                     r.send("thinking", text=ev.delta.text)
@@ -385,6 +445,7 @@ def _agent(r: Run, text: str, t0, remember):
         r.send("error", message="agent did not produce a final answer; using the deterministic answer", recoverable=True)
         final_input = draft
     final_input = _keep_top_cause(final_input, draft)
+    final_input = dict(final_input, actions=draft["actions"])   # actions are graph-derived; the LLM verifies them, it does not invent them
     final = r.finalize(final_input)
     if remember and seeds:
         seeds = [s for s in seeds if s]

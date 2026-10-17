@@ -396,3 +396,23 @@ def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude=None) -
     res.data["similar"] = out
     res.ms = (time.perf_counter() - t0) * 1000
     return res
+
+
+# ---------------------------------------------------------------- who owns the impacted services
+def dependent_owners(graph, services: list[str]) -> Result:
+    """For each impacted Service, its top inferred owner (so the right teams are told, not just the failing code's owner)."""
+    t0 = time.perf_counter()
+    res = Result("dependent_owners")
+    track()
+    out = []
+    for u in services[:5]:
+        name = u.split(":", 1)[1] if ":" in u else u
+        r = _q(res, graph, f"MATCH p=(x:Person)-[o:OWNS]->(t:Service {{name:$n}}) WHERE coalesce(x.bot,false)=false "
+                           f"RETURN x.email, x.name, o.score, {PATH_PROJ} ORDER BY o.score DESC LIMIT 1", {"n": name})
+        if r.rows:
+            email, pname, sc, ns, rs = r.rows[0]
+            pid = res.add_path(ns, rs, pid=f"owner{len(out) + 1}")
+            out.append(dict(service=uid("Service", name), email=email, name=pname, score=sc, path_id=pid))
+    res.data["owners"] = out
+    res.ms = (time.perf_counter() - t0) * 1000
+    return res

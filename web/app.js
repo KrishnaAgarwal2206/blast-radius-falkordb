@@ -74,7 +74,7 @@ const fg = ForceGraph()($('graph')).backgroundColor('rgba(0,0,0,0)').nodeId('id'
     if (lit || act) { ctx.shadowColor = '#FFB000'; ctx.shadowBlur = 8; } ctx.stroke(); ctx.shadowBlur = 0;
     if ((lit || act) && p >= 1) { const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, ang = Math.atan2(b.y - a.y, b.x - a.x);
       ctx.beginPath(); ctx.moveTo(b.x - 9 * Math.cos(ang) + 3 * Math.sin(ang), b.y - 9 * Math.sin(ang) - 3 * Math.cos(ang)); ctx.lineTo(b.x - 5 * Math.cos(ang), b.y - 5 * Math.sin(ang)); ctx.lineTo(b.x - 9 * Math.cos(ang) - 3 * Math.sin(ang), b.y - 9 * Math.sin(ang) + 3 * Math.cos(ang)); ctx.fillStyle = '#FFB000'; ctx.fill();
-      if (k > 1.1 || act) { ctx.font = `${9 / k}px JetBrains Mono, monospace`; ctx.fillStyle = '#FFB000'; ctx.fillText(l.type, mx, my - 3 / k); } }
+      if (k > 1.8 || act) { ctx.font = `${9 / k}px JetBrains Mono, monospace`; ctx.fillStyle = '#FFB000'; ctx.fillText(l.type, mx, my - 3 / k); } }
     ctx.globalAlpha = 1;
   })
   .linkDirectionalParticles((l) => (S.litLinks.has(l.id) && !reduced ? 2 : 0)).linkDirectionalParticleWidth(3).linkDirectionalParticleColor(() => '#FFB000')
@@ -240,32 +240,63 @@ function addQuery(e) {
   const s = [...S.q.list].sort((a, b) => a - b); $('tP95').textContent = s[Math.min(s.length - 1, Math.ceil(s.length * 0.95) - 1)].toFixed(1);
 }
 function closeGroup(e) { const G = S.groups?.[e.call_id]; if (G) G.el.querySelector('.st').textContent = `${G.n} queries · ${G.ms.toFixed(1)} ms`; }
+function badge(ok, llm) {
+  let h = `<span class="bdg ${ok ? 'ok' : 'bad'}" title="Every path id and every commit/incident id named is present in the graph results">graph-verified ${ok ? '✓' : '✗'}</span>`;
+  if (llm) { const c = { supported: 'ok', weak: 'warn', unsupported: 'bad' }[llm.verdict] || 'warn'; h += ` <span class="bdg ${c}" title="${esc(llm.reason)}">LLM: ${esc(llm.verdict)}</span>`; }
+  return h;
+}
+function focusPaths(pids, nids, btn) {
+  const on = btn.getAttribute('aria-pressed') !== 'true';
+  document.querySelectorAll('[aria-pressed]').forEach((x) => x.setAttribute('aria-pressed', 'false'));
+  if (!on) { S.active = null; return; }
+  btn.setAttribute('aria-pressed', 'true');
+  const nodes = new Set(), links = new Set();
+  pids.forEach((id) => { const p = S.paths[id]; if (!p) return; p.nodes.forEach((n) => nodes.add(n)); p.nodes.slice(1).forEach((n, i) => links.add(`${p.nodes[i]}|${p.rels[i]}|${n}`)); });
+  (nids || []).forEach((id) => S.nodes.has(id) && nodes.add(id));
+  S.active = { nodes, links }; S.lit = new Map([...nodes].map((n) => [n, performance.now() - 1000])); S.litLinks = new Map([...links].map((l) => [l, performance.now() - 1000]));
+  fitTo((n) => nodes.has(n.id), 110);
+}
+const sect = (t, sub) => `<h4 class="sec">${t}${sub ? ` <small>${sub}</small>` : ''}</h4>`;
 function finish(e) {
   const a = e.answer, box = $('tab-answer'); if (!S.userTab) selectTab('answer');
   if (!a) { box.innerHTML = `<div class="err-box"><b>No answer.</b> ${esc(S.lastError || 'Nothing in the graph matched that input. Try a service name such as opentelemetry-sdk, or paste a Python traceback.')}</div>`; return; }
-  box.innerHTML = `<div class="summary">${esc(a.summary)}</div><div class="meta">${e.ms ?? ''} ms · ${S.q.n} FalkorDB queries (${S.q.ms.toFixed(1)} ms) · confidence ${a.confidence ?? '–'} · LLM cost $${e.cost_usd ?? 0}</div>
-  <div class="meta">Click a claim to highlight its exact graph path.</div>`;
+  const V = a.llm_verification || {};
+  box.innerHTML = `<div class="summary">${esc(a.summary)}</div><div class="meta">${e.ms ?? ''} ms · ${S.q.n} FalkorDB queries (${S.q.ms.toFixed(1)} ms) · LLM cost $${e.cost_usd ?? 0}${Object.keys(V).length ? ' · LLM verification on' : ''}</div>`;
+  // 1. diagnosis trail
+  if (a.diagnosis?.length) {
+    box.insertAdjacentHTML('beforeend', sect('Diagnosis: what the agent did', 'click a step to see its paths'));
+    a.diagnosis.forEach((st, i) => {
+      const b = document.createElement('button'); b.className = 'step'; b.setAttribute('aria-pressed', 'false');
+      b.innerHTML = `<span class="n">${i + 1}</span><span class="t">${esc(st.title)}<br><small>${esc(st.finding)}</small><br><small>${st.queries} queries · ${st.ms} ms · ${badge(st.verified, V[st.id])}</small></span>`;
+      b.onclick = () => st.path_ids.length && focusPaths(st.path_ids, [], b); box.appendChild(b);
+    });
+  }
+  // 2. findings (claims with paths)
+  if (a.claims.length) box.insertAdjacentHTML('beforeend', sect('Findings', 'each cites a graph path'));
   a.claims.forEach((c) => {
     const b = document.createElement('button'); b.className = 'claim'; b.setAttribute('aria-pressed', 'false');
     const ps = c.path_ids.map((p) => S.paths[p]?.sentence).filter(Boolean);
     b.innerHTML = `<span class="kind">${esc(c.kind)}</span><br>${esc(c.text)}${ps.map((s) => `<span class="path">${esc(s)}</span>`).join('')}`;
-    b.onclick = () => selectClaim(c, b); box.appendChild(b);
+    b.onclick = () => focusPaths(c.path_ids, c.node_ids, b); box.appendChild(b);
   });
-  const n = Object.values(S.paths).length; feed(`Done. ${a.claims.length} claims, ${n} evidence paths.`, 't');
-  if (a.dropped_unverified_claims) feed(`${a.dropped_unverified_claims} claim(s) dropped: no graph path`, 'e');
+  // 3. recommended actions
+  if (a.actions?.length) {
+    box.insertAdjacentHTML('beforeend', sect('Recommended actions', 'drafts only: nothing is executed'));
+    a.actions.forEach((x) => {
+      const b = document.createElement('div'); b.className = 'act'; b.dataset.kind = x.kind;
+      b.innerHTML = `<div class="ah"><span class="ak">${esc(x.kind)}</span><b>${esc(x.title)}</b></div><div class="ad">${esc(x.detail)}</div>
+        ${x.command ? `<pre class="cmd">${esc(x.command)}</pre><button class="ghost cpy" data-cmd="${esc(x.command)}">Copy</button>` : ''}
+        <div class="af">${badge(x.verified, V[x.id])} <small>risk: ${esc(x.risk || 'none')}</small> <button class="ghost why">Show evidence</button></div>`;
+      b.querySelector('.why').onclick = (ev) => focusPaths(x.path_ids, [], ev.target);
+      b.querySelector('.cpy')?.addEventListener('click', async (ev) => { try { await navigator.clipboard.writeText(ev.target.dataset.cmd); ev.target.textContent = 'Copied'; setTimeout(() => (ev.target.textContent = 'Copy'), 1200); } catch {} });
+      box.appendChild(b);
+    });
+  }
+  const n = Object.values(S.paths).length; feed(`Done. ${a.claims.length} findings, ${(a.actions || []).length} actions, ${n} evidence paths.`, 't');
+  if (a.dropped_unverified_claims) feed(`${a.dropped_unverified_claims} item(s) dropped: no supporting graph path`, 'e');
   setTimeout(() => fitTo((n) => S.lit.has(n.id), 80, 1.6), 300);
 }
-function selectClaim(c, btn) {
-  const on = btn.getAttribute('aria-pressed') !== 'true';
-  document.querySelectorAll('.claim').forEach((x) => x.setAttribute('aria-pressed', 'false'));
-  if (!on) { S.active = null; return; }
-  btn.setAttribute('aria-pressed', 'true');
-  const nodes = new Set(), links = new Set();
-  c.path_ids.forEach((id) => { const p = S.paths[id]; if (!p) return; p.nodes.forEach((n) => nodes.add(n)); p.nodes.slice(1).forEach((n, i) => links.add(`${p.nodes[i]}|${p.rels[i]}|${n}`)); });
-  c.node_ids?.forEach((id) => S.nodes.has(id) && nodes.add(id)); S.active = { nodes, links }; S.lit = new Map([...nodes].map((n) => [n, performance.now() - 1000])); S.litLinks = new Map([...links].map((l) => [l, performance.now() - 1000]));
-  fitTo((n) => nodes.has(n.id), 110);
-}
-addEventListener('keydown', (e) => { if (e.key === 'Escape') { S.active = null; document.querySelectorAll('.claim').forEach((x) => x.setAttribute('aria-pressed', 'false')); }
+addEventListener('keydown', (e) => { if (e.key === 'Escape') { S.active = null; document.querySelectorAll('[aria-pressed]').forEach((x) => x.setAttribute('aria-pressed', 'false')); }
   if (e.target.matches('textarea,input,select')) return; if (e.key === '/') { e.preventDefault(); $('inp').focus(); }
   if ('1234'.includes(e.key) && e.key) setLens(['label', 'pagerank', 'depth', 'community'][+e.key - 1]); });
 
@@ -288,7 +319,7 @@ async function expand(n) {
 }
 
 // ---------------------------------------------------------------- lens, legend
-function setLens(l) { S.lens = l; S.active = null; document.querySelectorAll('.claim').forEach((x) => x.setAttribute('aria-pressed', 'false')); document.querySelectorAll('#lens button').forEach((b) => b.classList.toggle('on', b.dataset.lens === l)); legend(); }
+function setLens(l) { S.lens = l; S.active = null; document.querySelectorAll('[aria-pressed]').forEach((x) => x.setAttribute('aria-pressed', 'false')); document.querySelectorAll('#lens button').forEach((b) => b.classList.toggle('on', b.dataset.lens === l)); legend(); }
 document.querySelectorAll('#lens button').forEach((b) => (b.onclick = () => setLens(b.dataset.lens)));
 function legend() {
   const L = $('legend');

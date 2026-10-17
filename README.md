@@ -25,6 +25,8 @@ Commit ─MODIFIED→ File ←IMPORTS─ File ←CONTAINS─ Service ←DEPENDS_
  Person            Incident ─CAUSED_BY→ Commit    Person
 ```
 
+Every answer has three parts, each backed by paths: **Diagnosis** (the ordered steps the agent took, with the queries and latency of each), **Findings** (impact, cause, who to page, similar incidents), and **Recommended actions** (page X, review/compare a commit with a ready `git show` command, a *draft-only* rollback `git revert`, notify owners of impacted services, a paste-ready status update). Nothing is executed automatically. Each step and action carries a deterministic **graph-verified** badge (its paths exist and every commit/incident id it names appears in them) and, in LLM mode, an independent **LLM verdict** (supported / weak / unsupported with a reason).
+
 The agent does not guess: every tool is a deterministic FalkorDB query, the LLM only routes between tools and narrates, and the answer is validated against the paths the graph actually returned.
 
 ## Architecture

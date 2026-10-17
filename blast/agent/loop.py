@@ -1,7 +1,9 @@
 """L4 agent: Anthropic tool-use loop over L3 tools, streaming events; plus a deterministic pipeline
 (used for tests, offline mode, replay seeding, and when the spend limit is reached)."""
 import json
+import os
 import re
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -148,27 +150,30 @@ def add_spend(usd):
 def pipeline(r: Run, text: str):
     """Same tools, fixed order, templated claims. Zero LLM cost."""
     is_trace = "Traceback" in text or 'File "' in text
-    origin = None
+    origin, frame_nodes, tr = None, [], None
     if is_trace:
-        res, _ = r.call("trace_stacktrace", {"text": text}, "t1")
-        if res and res.data.get("origin"):
-            origin = res.data["origin_file"]
-            fn = res.data["origin"]
+        tr, _ = r.call("trace_stacktrace", {"text": text}, "t1")
+        if tr and tr.data.get("origin"):
+            origin = tr.data["origin_file"]
+            for fr in tr.data["frames"]:
+                frame_nodes += [x for x in (fr["function"], fr["file"]) if x]
     target = origin.split(":", 1)[1] if origin else text.strip().splitlines()[0][:200]
-    br, _ = r.call("blast_radius", {"target": target}, "t2")
+    br, _ = r.call("blast_radius", {"target": (tr.data["origin"].split(":", 1)[1] if origin and tr.data.get("origin", "").startswith("Function:") else target)}, "t2")
     if not br or "error" in br.data:
         r.send("error", message=(br.data.get("error") if br else "blast_radius failed"), recoverable=False)
         return None
     root = br.data["target"]
-    files = [root] if root.startswith("File:") else []
     svc = br.data.get("service") or (root if root.startswith("Service:") else None)
-    if svc:
-        q = core.run(r.graph, "MATCH (:Service {name:$n})-[:CONTAINS]->(f:File) RETURN f.path", {"n": svc.split(":", 1)[1]})
-        files += ["File:" + x[0] for x in q.rows]
-    seeds = list(dict.fromkeys(([fn] if is_trace and origin else []) + files))
+    if root.startswith("Service:"):   # a whole service: seeds are its files
+        q = core.run(r.graph, "MATCH (:Service {name:$n})-[:CONTAINS]->(f:File) RETURN f.path", {"n": root.split(':', 1)[1]})
+        seeds = ["File:" + x[0] for x in q.rows]
+    elif frame_nodes:                 # a stack trace: seeds are exactly the frames the trace passed through
+        seeds = list(dict.fromkeys(frame_nodes))
+    else:
+        seeds = [root]
     sc, _ = r.call("suspect_changes", {"nodes": seeds}, "t3")
     shas = [s["sha"] for s in (sc.data.get("suspects", []) if sc else [])]
-    wp, _ = r.call("who_to_page", {"nodes": [root] + files[:1], "suspect_shas": shas[:3]}, "t4")
+    wp, _ = r.call("who_to_page", {"nodes": ([svc] if svc else []) + seeds[:8], "suspect_shas": shas[:3]}, "t4")
     rc, _ = r.call("recall_incidents", {"nodes": seeds}, "t5")
     r.call("critical_nodes", {"scope": "Service"}, "t6")
     claims = []
@@ -188,8 +193,16 @@ def pipeline(r: Run, text: str):
         s = rc.data["similar"][0]
         claims.append(dict(kind="similar", text=f"Similar past incident {s['id']}: \"{s['title'][:70]}\" (shared files {len(s['shared_files'])}, similarity {s['similarity']}).",
                            path_ids=[s["path_id"]], node_ids=[s["uid"]]))
-    ans = dict(summary=f"Deterministic graph analysis of '{target[:60]}'.", confidence=0.6, claims=claims)
+    tn = core.short(root) if not root.startswith("Service:") else root.split(":", 1)[1]
+    ans = dict(summary=f"{tn} → {br.data['counts']['Service']} services and {br.data['counts']['File']} files depend on it; {len(shas)} recent suspect commit(s) touch it; {len(rc.data['similar']) if rc else 0} similar past incident(s) recalled from graph memory.", confidence=0.6, claims=claims)
     return ans, seeds, shas
+
+
+def _title(text: str) -> str:
+    lines = [l.strip() for l in text.strip().splitlines() if l.strip()]
+    if "Traceback" in text or 'File "' in text:
+        return (lines[-1] if lines else "stack trace")[:120]
+    return (lines[0] if lines else "incident")[:120]
 
 
 def record(r: Run, text: str, seeds, shas, answer):
@@ -198,7 +211,7 @@ def record(r: Run, text: str, seeds, shas, answer):
     sim = [c["node_ids"][0].split(":", 1)[1] for c in answer["similar_incidents"] if c["node_ids"]]
     svcs = list(dict.fromkeys(f for f in (r.results.get("blast_radius").data.get("service"),) if f))
     res, _ = r.call("record_incident", dict(
-        title=text.strip().splitlines()[0][:120], files=files[:12], services=[s.split(":", 1)[1] for s in svcs],
+        title=_title(text), files=files[:12], services=[s.split(":", 1)[1] for s in svcs],
         cause_sha=shas[0] if shas else None, similar_ids=sim), "rec")
     return res
 
@@ -249,6 +262,8 @@ def _agent(r: Run, text: str, t0, remember):
         r.cost += _cost(msg.usage)
         r.tokens["in"] += msg.usage.input_tokens
         r.tokens["out"] += msg.usage.output_tokens
+        if os.getenv("BLAST_DEBUG"):
+            print("TURN", turn, msg.stop_reason, [b.type + ':' + getattr(b, 'name', '') for b in msg.content], msg.usage.input_tokens, msg.usage.output_tokens, file=sys.stderr)
         msgs.append({"role": "assistant", "content": msg.content})
         calls = [b for b in msg.content if b.type == "tool_use"]
         if not calls:

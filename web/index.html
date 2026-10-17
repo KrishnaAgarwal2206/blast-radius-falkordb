@@ -4,97 +4,75 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Blast Radius</title>
+<meta name="description" content="Graph-powered incident agent on FalkorDB: what breaks, what changed, who to page — with the exact graph path behind every claim.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
 <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
-<style>
-  :root { --bg:#0b0e14; --panel:#121722; --line:#232b3b; --fg:#e6e9ef; --dim:#8791a5; --accent:#ff6b4a; }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,sans-serif; height:100vh; display:grid; grid-template-columns:380px 1fr 360px; grid-template-rows:auto 1fr; }
-  header { grid-column:1/4; padding:10px 16px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; }
-  header b { color:var(--accent); font-size:16px; } header span { color:var(--dim); }
-  aside { background:var(--panel); overflow:auto; padding:12px; border-right:1px solid var(--line); }
-  #right { border-left:1px solid var(--line); border-right:0; }
-  textarea { width:100%; height:110px; background:#0b0e14; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px; font:12px monospace; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:7px 12px; cursor:pointer; font-weight:600; }
-  button.ghost { background:#1c2333; color:var(--fg); }
-  h4 { margin:14px 0 6px; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
-  .ev { font:12px monospace; color:var(--dim); margin:2px 0; word-break:break-word; }
-  .ev.tool { color:var(--fg); margin-top:8px; } .ev.q { color:#7fd1ae; } .ev.err { color:#ff8080; }
-  .claim { padding:7px 9px; border:1px solid var(--line); border-radius:6px; margin:6px 0; cursor:pointer; }
-  .claim:hover, .claim.on { border-color:var(--accent); }
-  .claim small { color:var(--dim); display:block; }
-  #graph { position:relative; } #graph canvas { display:block; }
-  #legend { position:absolute; left:10px; bottom:10px; font-size:11px; color:var(--dim); }
-  #legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 8px; }
-  .row { display:flex; gap:8px; margin-top:8px; align-items:center; }
-  label { color:var(--dim); font-size:12px; }
-</style>
 </head>
 <body>
-<header><b>Blast Radius</b><span>paste a stack trace, or name a service / file — every claim is a graph path in FalkorDB</span>
-  <span id="stat" style="margin-left:auto"></span></header>
-<aside id="left">
-  <textarea id="inp" placeholder="Traceback ... or a service name like opentelemetry-exporter-otlp-proto-grpc"></textarea>
-  <div class="row"><button id="go">Investigate</button>
-    <button class="ghost" id="demo">Run demo scenario</button>
-    <label><input type="checkbox" id="llm"> LLM agent</label></div>
-  <h4>Answer</h4><div id="answer"></div>
-  <h4>Agent run</h4><div id="log"></div>
-</aside>
-<main id="graph"><div id="legend"></div></main>
-<aside id="right">
-  <h4>Under the hood — Cypher on FalkorDB</h4><div id="cypher"></div>
-</aside>
-<script>
-const COLORS = {Service:'#ff6b4a', File:'#4aa3ff', Function:'#9b8cff', Commit:'#ffc247', Person:'#4ad6a0', Incident:'#ff5fa2', Package:'#8791a5', Class:'#6fb3d9'};
-const nodes = new Map(), links = new Map(); let lit = new Set(), litLinks = new Set(), paths = {};
-const el = id => document.getElementById(id);
-el('legend').innerHTML = Object.entries(COLORS).map(([k,c]) => `<i style="background:${c}"></i>${k}`).join('');
-const G = ForceGraph()(el('graph')).backgroundColor('#0b0e14')
-  .nodeId('id').nodeLabel(n => n.id).nodeRelSize(5)
-  .nodeColor(n => COLORS[n.label] || '#999').nodeVal(n => lit.has(n.id) ? 3 : 1)
-  .linkColor(l => litLinks.has(l.id) ? '#ff6b4a' : '#2a3347').linkWidth(l => litLinks.has(l.id) ? 2.5 : 0.6)
-  .linkDirectionalArrowLength(3).linkDirectionalArrowRelPos(1)
-  .nodeCanvasObjectMode(() => 'after')
-  .nodeCanvasObject((n, ctx, s) => { if (lit.has(n.id) && s > 0.8) { ctx.font = `${11/s}px sans-serif`; ctx.fillStyle = '#e6e9ef'; ctx.fillText(short(n.id), n.x + 6, n.y + 3); } });
-const short = id => { const [l, ...k] = id.split(':'); const key = k.join(':'); return l === 'File' ? key.split('/').slice(-2).join('/') : l === 'Commit' ? key.slice(0,8) : key.split('.').slice(-2).join('.'); };
-const redraw = () => G.graphData({ nodes: [...nodes.values()], links: [...links.values()] });
-function resize() { G.width(el('graph').clientWidth).height(el('graph').clientHeight); } addEventListener('resize', resize); resize();
-const add = (t, cls, parent = 'log') => { const d = document.createElement('div'); d.className = 'ev ' + cls; d.textContent = t; el(parent).appendChild(d); el(parent).scrollTop = 1e9; return d; };
+<header id="top">
+  <div class="logo"><span class="dot"></span>Blast Radius</div>
+  <select id="repo" aria-label="Repository graph"></select>
+  <div class="seg" id="lens" role="group" aria-label="Algorithm lens">
+    <button data-lens="label" class="on" title="Color by node label (1)">Label</button>
+    <button data-lens="pagerank" title="FalkorDB algo.pageRank (2)">PageRank</button>
+    <button data-lens="depth" title="Blast depth from the failing node (3)">Blast depth</button>
+    <button data-lens="community" title="FalkorDB algo.labelPropagation (4)">Community</button>
+  </div>
+  <button id="btnSchema" class="ghost">Schema</button>
+  <div id="totals" class="totals" title="FalkorDB time only; LLM time excluded">
+    <span>Queries <b id="tQ">0</b></span><span>Total <b id="tMs">0</b> ms</span><span>p95 <b id="tP95">–</b> ms</span><span>Nodes <b id="tN">0</b></span>
+  </div>
+  <span id="pill" class="pill live">LIVE</span>
+</header>
 
-function handle(e) {
-  switch (e.type) {
-    case 'tool_call': add(`▶ ${e.tool} ${JSON.stringify(e.args).slice(0, 90)}`, 'tool'); break;
-    case 'graph_query': add(`${e.cypher}\n   ${e.ms} ms · ${e.rows} rows`, 'q', 'cypher'); break;
-    case 'tool_result': add(`✓ ${e.summary}`, ''); break;
-    case 'thinking': add(e.text, ''); break;
-    case 'error': add(`! ${e.message}`, 'err'); break;
-    case 'subgraph':
-      e.nodes.forEach(n => nodes.set(n.id, { ...nodes.get(n.id), ...n }));
-      e.edges.forEach(l => { if (nodes.has(l.source) && nodes.has(l.target)) links.set(l.id, { ...l }); }); redraw(); break;
-    case 'path': paths[e.path_id] = e; e.nodes.forEach(n => lit.add(n)); e.nodes.slice(1).forEach((n, i) => litLinks.add(`${e.nodes[i]}|${e.rels[i]}|${n}`)); redraw(); setTimeout(() => G.zoomToFit(600, 60), 300); break;
-    case 'run_finished': if (e.answer) showAnswer(e.answer, e); break;
-  }
-}
-function showAnswer(a, e) {
-  el('answer').innerHTML = `<div>${a.summary || ''}</div><small style="color:var(--dim)">${e.ms} ms · $${e.cost_usd ?? 0}</small>`;
-  a.claims.forEach(c => { const d = document.createElement('div'); d.className = 'claim'; d.innerHTML = `${c.text}<small>${c.kind} · ${c.path_ids.join(', ')}</small>`;
-    d.onclick = () => { document.querySelectorAll('.claim').forEach(x => x.classList.remove('on')); d.classList.add('on');
-      lit = new Set(); litLinks = new Set(); c.path_ids.forEach(p => { const P = paths[p]; if (!P) return; P.nodes.forEach(n => lit.add(n)); P.nodes.slice(1).forEach((n, i) => litLinks.add(`${P.nodes[i]}|${P.rels[i]}|${n}`)); }); redraw(); };
-    el('answer').appendChild(d); });
-}
-async function go(text, llm) {
-  nodes.clear(); links.clear(); lit = new Set(); litLinks = new Set(); paths = {}; redraw();
-  ['log', 'cypher', 'answer'].forEach(i => el(i).innerHTML = '');
-  const r = await fetch('/api/investigate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ input: text, llm }) });
-  if (!r.ok) { add('! ' + (await r.text()), 'err'); return; }
-  const { run_id } = await r.json();
-  const es = new EventSource(`/api/runs/${run_id}/events`);
-  es.onmessage = m => { const e = JSON.parse(m.data); handle(e); if (e.type === 'run_finished') es.close(); };
-  es.onerror = () => es.close();
-}
-el('go').onclick = () => go(el('inp').value, el('llm').checked);
-el('demo').onclick = () => { el('inp').value = 'opentelemetry-exporter-otlp-proto-grpc'; go(el('inp').value, el('llm').checked); };
-fetch('/api/repos').then(r => r.json()).then(r => el('stat').textContent = r.map(x => `${x.graph}: ${x.nodes} nodes`).join(' · ')).catch(() => {});
-</script>
+<aside id="left">
+  <h4>Investigate</h4>
+  <textarea id="inp" placeholder="Paste a Python stack trace, or name a service / file / function, e.g. opentelemetry-exporter-otlp-proto-grpc" aria-label="Incident input"></textarea>
+  <div class="row">
+    <button id="go" class="primary">Investigate</button>
+    <label class="chk" title="Use the Anthropic tool-use agent instead of the deterministic pipeline (costs money)"><input type="checkbox" id="llm"> LLM agent</label>
+  </div>
+  <h4>Scenarios</h4>
+  <div id="chips"></div>
+  <h4>Agent feed</h4>
+  <div id="feed" aria-live="polite"></div>
+</aside>
+
+<main id="stage">
+  <div id="graph" role="img" aria-label="Dependency graph of the investigated incident"></div>
+  <div id="legend"></div>
+  <div id="tip" hidden></div>
+  <div id="hero">
+    <div class="card">
+      <h1>What breaks if this changes?</h1>
+      <p>Paste a stack trace or name a service. An agent walks a live <b>FalkorDB</b> graph of code, commits, owners and past incidents — and every claim links to the exact path.</p>
+      <button id="heroGo" class="primary big">Run demo scenario</button>
+      <div class="hint" id="heroStat">connecting to FalkorDB…</div>
+    </div>
+  </div>
+</main>
+
+<aside id="right">
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="answer" class="on">Answer</button>
+    <button role="tab" data-tab="hood">Under the hood</button>
+  </div>
+  <div id="tab-answer" class="tabpane">
+    <div class="empty">Run an investigation to see the evidence-linked answer here.</div>
+  </div>
+  <div id="tab-hood" class="tabpane" hidden>
+    <div class="empty">Run an investigation to see FalkorDB’s queries stream here.</div>
+  </div>
+</aside>
+
+<footer id="memory">
+  <button id="memToggle" class="ghost">Memory timeline <span id="memCount"></span></button>
+  <div id="memBody" hidden></div>
+</footer>
+
+<div id="modal" hidden><div class="mbox"><button id="mClose" class="ghost">Close</button><h3>Graph schema (live from FalkorDB)</h3><div id="schemaGraph"></div></div></div>
+<script type="module" src="/static/app.js"></script>
 </body>
 </html>

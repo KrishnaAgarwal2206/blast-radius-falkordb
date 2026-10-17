@@ -1,0 +1,11 @@
+Exception in thread Thread-3 (_ticker):
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/threading.py", line 1075, in _bootstrap_inner
+    self.run()
+  File "/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/export/__init__.py", line 496, in _ticker
+    self.collect(timeout_millis=self._export_timeout_millis)
+  File "/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/export/__init__.py", line 316, in collect
+    metrics = self._collect(self, timeout_millis=timeout_millis)
+  File "/app/venv/lib/python3.12/site-packages/opentelemetry/sdk/metrics/_internal/measurement_consumer.py", line 95, in collect
+    remaining_time = deadline_ns - time_ns()
+TimeoutError: Timed out while executing callback

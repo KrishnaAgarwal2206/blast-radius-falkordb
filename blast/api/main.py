@@ -84,6 +84,35 @@ def critical(g: str, scope: str = "Service"):
     return {**res.data, "queries": [dict(cypher=q.cypher, ms=q.ms) for q in res.queries]}
 
 
+@app.get("/api/metrics")
+def metrics():
+    from ..graph.client import LATENCIES
+    xs = sorted(LATENCIES)
+    pct = lambda q: round(xs[min(int(len(xs) * q), len(xs) - 1)], 2) if xs else None
+    return {"queries": len(xs), "p50_ms": pct(0.5), "p95_ms": pct(0.95), "max_ms": round(xs[-1], 2) if xs else None}
+
+
+@app.get("/api/graph/{g}/overview")
+def overview(g: str):
+    """Package-level (Service) map with PageRank, betweenness and community: the default non-hairball view."""
+    _require_graph(g)
+    qs = []
+
+    def q(c, **p):
+        r = run(g, c, p, timeout=20000)
+        qs.append(dict(cypher=r.cypher, ms=round(r.ms, 2), rows=len(r.rows)))
+        return r.rows
+
+    pr = dict(q("CALL algo.pageRank('Service','DEPENDS_ON') YIELD node, score RETURN node.name, score"))
+    bt = dict(q("CALL algo.betweenness({nodeLabels:['Service'], relationshipTypes:['DEPENDS_ON']}) YIELD node, score RETURN node.name, score"))
+    cm = dict(q("CALL algo.labelPropagation({nodeLabels:['Service'], relationshipTypes:['DEPENDS_ON']}) YIELD node, communityId RETURN node.name, communityId"))
+    nodes = [dict(id=f"Service:{n}", label="Service", name=n, pagerank=pr.get(n, 0), betweenness=bt.get(n, 0), community=cm.get(n, 0),
+                  files=f) for n, f in q("MATCH (s:Service) OPTIONAL MATCH (s)-[:CONTAINS]->(f:File) RETURN s.name, count(f)")]
+    edges = [dict(id=f"Service:{a}|DEPENDS_ON|Service:{b}", source=f"Service:{a}", target=f"Service:{b}", type="DEPENDS_ON")
+             for a, b in q("MATCH (a:Service)-[:DEPENDS_ON]->(b:Service) RETURN a.name, b.name")]
+    return {"nodes": nodes, "edges": edges, "queries": qs}
+
+
 @app.get("/api/graph/{g}/subgraph")
 def subgraph(g: str, ids: str = Query(..., description="comma-separated node ids like File:path,Service:name")):
     _require_graph(g)

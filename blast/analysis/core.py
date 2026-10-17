@@ -44,7 +44,8 @@ class Result:
             self.nodes.setdefault(u, dict(label=l, key=k, name=d))
         for i, r in enumerate(rs):
             self.edges.append((us[i], r, us[i + 1]))
-        sent = short(us[0]) + "".join(f" —{r}→ {short(us[i + 1])}" for i, r in enumerate(rs))
+        nm = [d if l == "Person" and d else short(u) for (l, _, d), u in zip(ns, us)]
+        sent = nm[0] + "".join(f" —{r}→ {nm[i + 1]}" for i, r in enumerate(rs))
         self.paths.append(dict(path_id=pid, nodes=us, rels=rs, sentence=sent))
         return pid
 
@@ -109,9 +110,11 @@ def blast_radius(graph, target: str, max_depth: int = 3) -> Result:
             res.data["service"] = uid("Service", svc[0][0])
     elif label == "Function":
         collect(f"MATCH p=(x:Function)-[:CALLS*1..{d}]->(t:Function {{qname:$k}}) RETURN {PATH_PROJ} LIMIT 400", {"k": key})
-        f = _q(res, graph, "MATCH (f:File)-[:DEFINES]->(:Function {qname:$k}) RETURN f.path", {"k": key}).rows
+        f = _q(res, graph, "MATCH (s:Service)-[:CONTAINS]->(f:File)-[:DEFINES]->(:Function {qname:$k}) RETURN f.path, s.name", {"k": key}).rows
         if f:
             collect(f"MATCH p=(x:File)-[:IMPORTS*1..{d}]->(t:File {{path:$k}}) RETURN {PATH_PROJ} LIMIT 300", {"k": f[0][0]})
+            collect(f"MATCH p=(x:Service)-[:DEPENDS_ON*1..{d}]->(t:Service {{name:$k}}) RETURN {PATH_PROJ} LIMIT 200", {"k": f[0][1]})
+            res.data["service"] = uid("Service", f[0][1])
     else:
         collect(f"MATCH p=(x:Service)-[:DEPENDS_ON*1..{d}]->(t:Service {{name:$k}}) RETURN {PATH_PROJ} LIMIT 300", {"k": key})
     ranked = sorted(impacted.items(), key=lambda kv: (kv[1][0], kv[0]))
@@ -348,7 +351,7 @@ def similar_incidents(graph, node_uids: list[str], top: int = 3, exclude: str | 
     for iid, a in agg.items():
         tot = _q(res, graph, "MATCH (i:Incident {id:$i})-[:AFFECTED]->(f:File) RETURN count(f)", {"i": iid}).rows[0][0]
         jac = len(a["shared"]) / max(len(set(files)) + tot - len(a["shared"]), 1)
-        scored.append((jac + 0.01 * len(a["shared"]), iid, a, jac))
+        scored.append((jac + 0.01 * len(a["shared"]) + (0.1 if a.get("source") == "live" else 0), iid, a, jac))  # recorded investigations are exact analogs: small rank bonus
     out = []
     for _, iid, a, jac in sorted(scored, reverse=True)[:top]:
         c = _q(res, graph, f"MATCH p=(i:Incident {{id:$i}})-[:CAUSED_BY]->(c:Commit) RETURN c.sha, c.msg, {PATH_PROJ}", {"i": iid}).rows

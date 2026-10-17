@@ -36,6 +36,7 @@ class QResult:
 
 # Observers receive every executed query (the agent streams these to the UI).
 _observers: list = []
+LATENCIES: list = []   # server-side ms of recent queries (for p50/p95 display)
 _tracker: ContextVar = ContextVar('tracker', default=None)
 
 
@@ -59,6 +60,8 @@ def run(graph: str, cypher: str, params: dict | None = None, readonly: bool = Tr
     rtt = (time.perf_counter() - t0) * 1000
     header = [h[1] if isinstance(h, (list, tuple)) else h for h in (res.header or [])]
     out = QResult(res.result_set, header, cypher, params, float(res.run_time_ms), rtt)
+    LATENCIES.append(out.ms)
+    del LATENCIES[:-2000]
     t = _tracker.get()
     if t is not None:
         t.append(out)

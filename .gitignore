@@ -6,3 +6,5 @@ node_modules/
 web/dist/
 data/repos/
 .pytest_cache/
+data/replay/
+data/spend_ledger.json

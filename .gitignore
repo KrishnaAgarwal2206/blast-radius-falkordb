@@ -13,3 +13,5 @@ data/envs/
 data/apps/httpie/
 data/apps/precommit/
 data/apps/cookiecutter/
+docs/video/*.mp4
+data/video/

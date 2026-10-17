@@ -109,3 +109,6 @@ small.dim{color:var(--dim)}
 #portfolioBody{max-height:60vh;overflow:auto}.pf{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;background:var(--surface-2)}.pf.differs{border-color:var(--path)}
 .adv-chip{display:inline-block;font:11px var(--mono);padding:2px 8px;border-radius:99px;margin:4px 6px 0 0;border:1px solid var(--line)}
 .adv-chip.reachable{color:#FF8A7A;border-color:#7a2a22}.adv-chip.no_path_found{color:#7fc4f0;border-color:#27506b}.adv-chip.unknown{color:var(--dim)}
+
+.act .ad{white-space:pre-wrap;font-size:12.5px}
+.act .ad:first-line{font-size:13px}

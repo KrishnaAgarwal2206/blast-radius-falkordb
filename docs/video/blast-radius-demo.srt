@@ -1,0 +1,35 @@
+1
+00:00:01,199 --> 00:00:06,713
+Your scanner just flagged 25 vulnerable packages. Which of them can your code actually reach?
+
+2
+00:00:07,413 --> 00:00:33,198
+This is HTTPie 2.6.0. Blast Radius loads the app and its pinned dependencies into a FalkorDB graph. About 7,000 functions across 11 packages. Each OSV advisory maps to the function its fix commit changed. Then we ask the graph one question. Is there a call path from an entry point to that function? There are three verdicts. 3 reachable. 22 unknown, and we say so. 0 declared safe.
+
+3
+00:00:33,898 --> 00:00:56,920
+Here is one. CVE-2023-32681 in requests. Four hops: core.main, core.program, collect_messages, Session.send, rebuild_proxies. Every claim cites a path id returned by FalkorDB. No path, no claim. Five unknowns have a possible path through dynamic dispatch. We disclose that instead of guessing.
+
+4
+00:00:57,620 --> 00:01:05,658
+Nothing is hidden. Every Cypher query streams to the Under the hood panel with its latency. About 60 queries in roughly 200 milliseconds.
+
+5
+00:01:06,358 --> 00:01:32,732
+Now we act. Version constraints live on DEPENDS_ON edges. Upgrading requests to 2.32.4 clears 2 reachable CVEs and passes smoke checks in a throw-away virtualenv, pip check included. urllib3 2.5.0 is blocked. Before any test runs, FalkorDB builds the upgraded graph and diffs imported names. HTTPie imports DEFAULT_CIPHERS, which no longer exists. The smoke check then confirms the ImportError.
+
+6
+00:01:33,432 --> 00:01:58,178
+The same diff shows requests-toolbelt breaks too. So the plan adds requests-toolbelt 1.0.0. The LLM drafts a minimal patch to httpie/ssl.py, applied to a copy. Smoke checks pass on that exact combination. Re-running the analysis on the upgraded graph leaves 0 reachable, down from 3. Test results are shown separately from the fixed claim. Patches are drafts. Nothing runs on the real repo.
+
+7
+00:01:58,878 --> 00:02:23,213
+Now the twist. The same critical CVE, PyYAML 5.3.1, CVSS 9.8, in two apps. pre-commit 2.9.0 only passes a safe loader through functools.partial. No path found. A small app using FullLoader is reachable in 2 hops. Same alert, opposite answers. Verdicts persist in a shared FalkorDB graph and are recalled across apps in the Portfolio view.
+
+8
+00:02:23,913 --> 00:02:44,119
+Across 3 real apps plus a control: 59 alerts, 10 reachable, 48 unknown, all disclosed. The vulnerable function is inferred from the fix commit, and we say so. Reachable is not exploitable. FalkorDB makes this work: persistent graphs, shortestPath, constraints on edges, a two-graph diff, and one shared decision graph.
+
+9
+00:02:44,819 --> 00:02:55,367
+Stop triaging by severity alone. Ask the graph for the path, then check the fix. This is Blast Radius. Try the live demo at blast-radius-yeki dot onrender dot com.

@@ -1,0 +1,67 @@
+{
+  "scenes": [
+    {
+      "id": "hook",
+      "narration": "Your scanner just flagged 25 vulnerable packages. Which of them can your code actually reach?",
+      "headline": "25 alerts. Which ones matter?",
+      "caption": "HTTPie 2.6.0: one dependency scan, 25 vulnerability alerts.",
+      "emphasis": ["25 vulnerable packages", "actually reach"]
+    },
+    {
+      "id": "triage",
+      "narration": "This is HTTPie 2.6.0. Blast Radius loads the app and its pinned dependencies into a FalkorDB graph. About 7,000 functions across 11 packages. Each OSV advisory maps to the function its fix commit changed. Then we ask the graph one question. Is there a call path from an entry point to that function? There are three verdicts. 3 reachable. 22 unknown, and we say so. 0 declared safe.",
+      "headline": "Ask the graph, not severity",
+      "caption": "25 alerts: 3 reachable, 22 unknown, 0 declared safe.",
+      "emphasis": ["7,000 functions across 11 packages", "3 reachable", "0 declared safe"]
+    },
+    {
+      "id": "path",
+      "narration": "Here is one. CVE-2023-32681 in requests. Four hops: core.main, core.program, collect_messages, Session.send, rebuild_proxies. Every claim cites a path id returned by FalkorDB. No path, no claim. Five unknowns have a possible path through dynamic dispatch. We disclose that instead of guessing.",
+      "headline": "Proof is a call path",
+      "caption": "CVE-2023-32681: core.main to SessionRedirectMixin.rebuild_proxies in 4 hops.",
+      "emphasis": ["CVE-2023-32681", "Four hops", "No path, no claim"]
+    },
+    {
+      "id": "cypher",
+      "narration": "Nothing is hidden. Every Cypher query streams to the Under the hood panel with its latency. About 60 queries in roughly 200 milliseconds.",
+      "headline": "Every query, live",
+      "caption": "Each Cypher query and its millisecond latency, streamed as it runs.",
+      "emphasis": ["Every Cypher query", "200 milliseconds"]
+    },
+    {
+      "id": "plan",
+      "narration": "Now we act. Version constraints live on DEPENDS_ON edges. Upgrading requests to 2.32.4 clears 2 reachable CVEs and passes smoke checks in a throw-away virtualenv, pip check included. urllib3 2.5.0 is blocked. Before any test runs, FalkorDB builds the upgraded graph and diffs imported names. HTTPie imports DEFAULT_CIPHERS, which no longer exists. The smoke check then confirms the ImportError.",
+      "headline": "A plan the graph checks",
+      "caption": "requests 2.32.4 passes. urllib3 2.5.0 blocked: DEFAULT_CIPHERS removed.",
+      "emphasis": ["2 reachable CVEs", "urllib3 2.5.0 is blocked", "DEFAULT_CIPHERS"]
+    },
+    {
+      "id": "fixloop",
+      "narration": "The same diff shows requests-toolbelt breaks too. So the plan adds requests-toolbelt 1.0.0. The LLM drafts a minimal patch to httpie/ssl.py, applied to a copy. Smoke checks pass on that exact combination. Re-running the analysis on the upgraded graph leaves 0 reachable, down from 3. Test results are shown separately from the fixed claim. Patches are drafts. Nothing runs on the real repo.",
+      "headline": "From 3 reachable to 0",
+      "caption": "Draft patch applied to a copy; tests reported separately from the fix.",
+      "emphasis": ["requests-toolbelt 1.0.0", "0 reachable, down from 3", "Patches are drafts"]
+    },
+    {
+      "id": "twist",
+      "narration": "Now the twist. The same critical CVE, PyYAML 5.3.1, CVSS 9.8, in two apps. pre-commit 2.9.0 only passes a safe loader through functools.partial. No path found. A small app using FullLoader is reachable in 2 hops. Same alert, opposite answers. Verdicts persist in a shared FalkorDB graph and are recalled across apps in the Portfolio view.",
+      "headline": "Same CVE, opposite answers",
+      "caption": "CVE-2020-14343: no path in pre-commit, reachable in 2 hops elsewhere.",
+      "emphasis": ["CVSS 9.8", "No path found", "reachable in 2 hops"]
+    },
+    {
+      "id": "why",
+      "narration": "Across 3 real apps plus a control: 59 alerts, 10 reachable, 48 unknown, all disclosed. The vulnerable function is inferred from the fix commit, and we say so. Reachable is not exploitable. FalkorDB makes this work: persistent graphs, shortestPath, constraints on edges, a two-graph diff, and one shared decision graph.",
+      "headline": "Why FalkorDB",
+      "caption": "3 apps plus a control: 59 alerts, 10 reachable, 48 unknown.",
+      "emphasis": ["59 alerts, 10 reachable", "Reachable is not exploitable", "two-graph diff"]
+    },
+    {
+      "id": "close",
+      "narration": "Stop triaging by severity alone. Ask the graph for the path, then check the fix. This is Blast Radius. Try the live demo at blast-radius-yeki dot onrender dot com.",
+      "headline": "Blast Radius: Reachability-to-Repair",
+      "caption": "Try the live demo: blast-radius-yeki.onrender.com. Code on GitHub.",
+      "emphasis": ["Ask the graph for the path", "Try the live demo"]
+    }
+  ]
+}

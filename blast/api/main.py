@@ -53,7 +53,7 @@ def repos():
     from ..supply.apps import APPS
     out = []
     for g in list_graphs():
-        if g == "sc_memory" or "__up_" in g:
+        if g == "sc_memory" or "__up_" in g or "__fix_" in g:
             continue
         try:
             n = run(g, "MATCH (n) RETURN count(n)").rows[0][0]

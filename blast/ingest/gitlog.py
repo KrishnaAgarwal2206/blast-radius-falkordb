@@ -9,6 +9,7 @@ from pathlib import Path
 BOT = re.compile(r"(\[bot\]|renovate|dependabot|github-actions|opentelemetrybot)", re.I)
 FIX = re.compile(r"\b(fix|fixes|fixed|revert|regression|bug|crash|hang|leak)\b", re.I)
 HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+NOISE = re.compile(r"^(update version|bump|prepare|release|version|merge |chore\(release\)|\[?(release|changelog))", re.I)
 PR = re.compile(r"\(#(\d+)\)")
 
 

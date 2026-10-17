@@ -94,7 +94,7 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
 
     # ---- structure ----
     run(graph, "MERGE (:Repo {name:$n})", {"n": graph}, readonly=False)
-    batched(graph, "UNWIND $rows AS r MERGE (s:Service {name:r.name}) SET s.path=r.path", services)
+    batched(graph, "UNWIND $rows AS r MERGE (s:Service {name:r.name}) SET s.dir=r.path", services)
     batched(graph, "UNWIND $rows AS r MATCH (s:Service {name:r.service}) MERGE (f:File {path:r.path}) "
                    "SET f.service=r.service, f.module=r.module, f.loc=r.loc MERGE (s)-[:CONTAINS]->(f)",
             [dict(path=f.path, service=f.service, module=f.module, loc=f.loc) for f in files.values()])
@@ -121,7 +121,7 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
     # ---- history ----
     prefixes = [f"{s['path']}/src" for s in services]
     commits = gitlog.read_log(root, months, prefixes)
-    commits = [c for c in commits if any(f in files for f in c["files"])]
+    commits = [c for c in commits if any(f in files for f in c["files"]) and not gitlog.NOISE.search(c["msg"])]
     log(f"git: {len(commits)} commits touching source ({time.perf_counter()-t0:.1f}s)")
     people = {}
     for c in commits:
@@ -221,13 +221,28 @@ def ingest(repo: str, graph: str, months: int = 12, max_incidents: int = 120, lo
     return stats
 
 
+def clone_if_url(repo: str, log=print) -> str:
+    """`blast ingest <url|path>`: clone URLs into data/repos/<name> (full history, needed for blame)."""
+    if not re.match(r"^(https?://|git@)", repo):
+        return repo
+    import subprocess
+    dest = config.ROOT / "data" / "repos" / re.sub(r"\.git$", "", repo.rstrip("/").split("/")[-1])
+    if dest.exists():
+        subprocess.run(["git", "-C", str(dest), "pull", "-q", "--ff-only"], check=False)
+    else:
+        log(f"cloning {repo} ...")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "-q", repo, str(dest)], check=True)
+    return str(dest)
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("repo", nargs="?", default=config.REPO_PATH)
+    ap = argparse.ArgumentParser(description="Ingest a Python monorepo into a FalkorDB graph (one graph per repo)")
+    ap.add_argument("repo", nargs="?", default=config.REPO_PATH, help="local path or git URL")
     ap.add_argument("--graph", default=config.DEFAULT_GRAPH)
     ap.add_argument("--months", type=int, default=12)
     a = ap.parse_args()
-    ingest(a.repo, a.graph, a.months)
+    ingest(clone_if_url(a.repo), a.graph, a.months)
 
 
 if __name__ == "__main__":

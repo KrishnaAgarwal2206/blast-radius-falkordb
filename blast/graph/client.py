@@ -1,5 +1,6 @@
 """Thin FalkorDB wrapper: every call returns rows plus the Cypher and latency (shown in the UI)."""
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 from falkordb import FalkorDB
@@ -35,6 +36,14 @@ class QResult:
 
 # Observers receive every executed query (the agent streams these to the UI).
 _observers: list = []
+_tracker: ContextVar = ContextVar('tracker', default=None)
+
+
+def track():
+    """Start collecting queries in the current context; returns the list."""
+    lst = []
+    _tracker.set(lst)
+    return lst
 
 
 def observe(fn):
@@ -50,6 +59,9 @@ def run(graph: str, cypher: str, params: dict | None = None, readonly: bool = Tr
     rtt = (time.perf_counter() - t0) * 1000
     header = [h[1] if isinstance(h, (list, tuple)) else h for h in (res.header or [])]
     out = QResult(res.result_set, header, cypher, params, float(res.run_time_ms), rtt)
+    t = _tracker.get()
+    if t is not None:
+        t.append(out)
     for fn in list(_observers):
         fn(out)
     return out

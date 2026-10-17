@@ -125,6 +125,7 @@ async function loadOverview() {
   } catch (e) { S.baseErr = e; }
 }
 function heroFor() {
+  if (typeof legend === 'function') setTimeout(legend, 0);
   const sup = S.graph?.startsWith('sc_');
   $('heroH').textContent = sup ? 'Which alerts can actually be exploited?' : 'What breaks if this changes?';
   $('heroP').innerHTML = sup ? 'Your scanner flags every vulnerable package version. Blast Radius walks a <b>FalkorDB</b> graph of your code, its dependencies and their call paths to show which advisories have a <b>demonstrable route from an entry point</b> to the vulnerable function, then plans and checks the smallest fix.'
